@@ -125,6 +125,10 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: 1
           TRACE_DIR: ${{ github.workspace }}/trace
+          # Python 3.14 defaults coverage to core=sysmon, which records a line only the
+          # first time it runs, so per-test contexts come out incomplete
+          # (warning no-sysmon-context). ctrace records every test.
+          COVERAGE_CORE: ctrace
         run: |
           . venv/bin/activate
           mkdir -p "$TRACE_DIR"
