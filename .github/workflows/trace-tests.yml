@@ -43,6 +43,13 @@ jobs:
       cache_key: ${{ steps.info.outputs.cache_key }}
     steps:
       - uses: actions/checkout@v4
+      # split_tests.py collects every test, so conftest imports need HA's OS libs
+      # (ffmpeg brings libopus for voip). Same packages as HA's prepare-pytest-full.
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
       - id: info
         run: |
           echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
