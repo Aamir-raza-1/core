@@ -1,0 +1,42 @@
+name: Analyze traces (CI test-selection experiment)
+
+# Builds the file -> tests map from a "Trace tests" run's artifacts, next to the data,
+# and uploads only the small results (report.json, map_testfiles.json.gz).
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of a "Trace tests" workflow run
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: trace-group-*
+          path: artifacts
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Analyze
+        run: |
+          du -sh artifacts/* | head -20
+          python3 script/trace/analyze.py artifacts --out out --no-test-map > /dev/null
+          echo "${{ inputs.run_id }}" > out/source_run_id.txt
+          ls -la out
+          python3 -c "import json; r=json.load(open('out/report.json')); print(json.dumps({k: r[k] for k in ['tests','outcomes','timing','deps_per_test_median','tests_reading_noncode_files_invisible_to_coverage']}, indent=1, default=list))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: analysis
+          path: out/
+          retention-days: 30
