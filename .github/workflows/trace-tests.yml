@@ -1,0 +1,156 @@
+name: Trace tests (CI test-selection experiment)
+
+# Phase 1 of github.com/Aamir-raza-1/ci-casestudies. Runs Home Assistant's own
+# pytest command with two recorders on:
+#   - per-test coverage   (pytest-cov --cov-context=test): Python files each test executed
+#   - eBPF file opens     (bpftrace + script/trace): every file each test opened
+# pilot: run the given paths twice (baseline vs traced) to measure overhead.
+# full:  trace the whole suite in N groups, split by HA's own split_tests.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: pilot or full
+        type: choice
+        options: [pilot, full]
+        default: pilot
+      paths:
+        description: Test paths for pilot mode (space separated)
+        default: >-
+          tests/helpers/test_device_registry.py tests/helpers/test_deprecation.py
+          tests/components/diagnostics tests/components/climate tests/components/water_heater
+      groups:
+        description: Number of groups for full mode
+        default: "10"
+
+permissions:
+  contents: read
+
+env:
+  UV_CACHE_DIR: /tmp/uv-cache
+  APT_CACHE_VERSION: 1
+  SQLALCHEMY_WARN_20: 1
+  PYTHONASYNCIODEBUG: 1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      groups: ${{ steps.split.outputs.groups }}
+      uv_version: ${{ steps.info.outputs.uv_version }}
+      python_version: ${{ steps.info.outputs.python_version }}
+      cache_key: ${{ steps.info.outputs.cache_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: info
+        run: |
+          echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
+          echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+          echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ steps.info.outputs.python_version }}
+          uv-version: ${{ steps.info.outputs.uv_version }}
+          python-cache-key: ${{ steps.info.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+          save: "true"
+      - id: split
+        env:
+          MODE: ${{ inputs.mode }}
+          PATHS: ${{ inputs.paths }}
+          GROUPS: ${{ inputs.groups }}
+        run: |
+          . venv/bin/activate
+          if [[ "$MODE" == "pilot" ]]; then
+            echo "$PATHS" > pytest_buckets.txt
+            echo "groups=[1]" >> "$GITHUB_OUTPUT"
+          else
+            python -m script.split_tests "$GROUPS" tests
+            echo "groups=$(python3 -c "import json; print(json.dumps(list(range(1, $GROUPS + 1))))")" >> "$GITHUB_OUTPUT"
+          fi
+          wc -l pytest_buckets.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pytest_buckets
+          path: pytest_buckets.txt
+
+  trace:
+    name: Trace group ${{ matrix.group }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.prepare.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg libxml2-utils
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ needs.prepare.outputs.python_version }}
+          uv-version: ${{ needs.prepare.outputs.uv_version }}
+          python-cache-key: ${{ needs.prepare.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: pytest_buckets
+      - name: Install bpftrace and compile translations
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bpftrace
+          bpftrace --version
+          . venv/bin/activate
+          python3 -m script.translations develop --all
+      - name: Baseline run (HA's command, pilot only)
+        if: inputs.mode == 'pilot'
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: |
+          . venv/bin/activate
+          start=$(date +%s)
+          python3 -b -X dev -m pytest -qq --timeout=9 --numprocesses logical --dist=loadfile \
+            --cov=homeassistant -o console_output_style=count -p no:sugar \
+            $(sed -n "${{ matrix.group }},1p" pytest_buckets.txt) > baseline.txt 2>&1 || true
+          echo "baseline_seconds=$(( $(date +%s) - start ))" | tee -a timing.txt
+          tail -3 baseline.txt
+          rm -f .coverage .coverage.*
+      - name: Traced run
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+          TRACE_DIR: ${{ github.workspace }}/trace
+        run: |
+          . venv/bin/activate
+          mkdir -p "$TRACE_DIR"
+          sudo BPFTRACE_MAX_STRLEN=200 bpftrace script/trace/opens.bt > "$TRACE_DIR/opens.log" 2> bpftrace.err &
+          for i in $(seq 1 60); do grep -q "Attaching" bpftrace.err 2>/dev/null && break; sleep 1; done
+          cat bpftrace.err
+          start=$(date +%s)
+          # Same command as HA CI, plus per-test coverage contexts and the trace plugin.
+          # --timeout raised from 9 to 60 so tracing overhead cannot turn into timeouts.
+          python3 -b -X dev -m pytest -qq --timeout=60 --numprocesses logical --dist=loadfile \
+            --cov=homeassistant --cov-context=test -p script.trace.pytest_trace_plugin \
+            -o console_output_style=count -p no:sugar \
+            --junitxml=trace/junit.xml -o junit_family=legacy \
+            $(sed -n "${{ matrix.group }},1p" pytest_buckets.txt) > traced.txt 2>&1 || true
+          echo "traced_seconds=$(( $(date +%s) - start ))" | tee -a timing.txt
+          sudo pkill -INT bpftrace || true
+          sleep 3
+          tail -3 traced.txt
+          mv .coverage "$TRACE_DIR/coverage.sqlite"
+          cp timing.txt baseline.txt traced.txt "$TRACE_DIR/" 2>/dev/null || true
+          git rev-parse HEAD > "$TRACE_DIR/commit.txt"
+          gzip -9 "$TRACE_DIR/opens.log"
+          ls -la "$TRACE_DIR" | head -20
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trace-group-${{ matrix.group }}
+          path: trace/
+          retention-days: 30
