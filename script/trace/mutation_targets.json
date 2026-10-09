@@ -1,0 +1,19 @@
+[
+ "homeassistant/components/automation/trace.py",
+ "homeassistant/components/here_travel_time/sensor.py",
+ "homeassistant/components/lovelace/__init__.py",
+ "homeassistant/components/nexia/entity.py",
+ "homeassistant/components/pvoutput/sensor.py",
+ "homeassistant/components/reolink/camera.py",
+ "homeassistant/components/system_bridge/__init__.py",
+ "homeassistant/components/system_bridge/binary_sensor.py",
+ "homeassistant/components/system_bridge/data.py",
+ "homeassistant/components/system_bridge/entity.py",
+ "homeassistant/components/system_bridge/sensor.py",
+ "homeassistant/components/system_bridge/update.py",
+ "homeassistant/components/template/config_flow.py",
+ "homeassistant/helpers/template/extensions/devices.py",
+ "homeassistant/helpers/deprecation.py",
+ "homeassistant/components/climate/__init__.py",
+ "homeassistant/components/water_heater/__init__.py"
+]

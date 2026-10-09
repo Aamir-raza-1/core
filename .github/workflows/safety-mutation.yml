@@ -1,0 +1,152 @@
+name: Safety check (mutation)
+
+# Phase 1 safety check for github.com/Aamir-raza-1/ci-casestudies.
+# Plants small bugs (mutants) in files changed by real HA PRs, runs the FULL suite per batch,
+# and checks that every test file a bug made fail was inside our selection.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Random seed for mutant choice
+        default: "1"
+      runtime_run_id:
+        description: Run ID of the analyze-traces run that produced map_testfiles.json.gz
+        default: "37961403469"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  UV_CACHE_DIR: /tmp/uv-cache
+  APT_CACHE_VERSION: 1
+  SQLALCHEMY_WARN_20: 1
+  PYTHONASYNCIODEBUG: 1
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      batches: ${{ steps.gen.outputs.batches }}
+      uv_version: ${{ steps.info.outputs.uv_version }}
+      python_version: ${{ steps.info.outputs.python_version }}
+      cache_key: ${{ steps.info.outputs.cache_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus0
+      - id: info
+        run: |
+          echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
+          echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+          echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ steps.info.outputs.python_version }}
+          uv-version: ${{ steps.info.outputs.uv_version }}
+          python-cache-key: ${{ steps.info.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+          save: "true"
+      - id: gen
+        env:
+          SEED: ${{ inputs.seed }}
+        run: |
+          . venv/bin/activate
+          python script/trace/static_imports.py . --out mutation/static.json
+          gzip -9 mutation/static.json
+          python -m script.trace.mutate generate script/trace/mutation_targets.json --seed "$SEED" --out mutation
+          python -m script.split_tests 10 tests
+          cp pytest_buckets.txt mutation/
+          echo "batches=$(python3 -c "import json; print(json.dumps(list(range(len(json.load(open('mutation/batches.json')))))))")" >> "$GITHUB_OUTPUT"
+          cat mutation/batches.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutation
+          path: mutation/
+
+  run:
+    name: Batch ${{ matrix.batch }} group ${{ matrix.group }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.prepare.outputs.batches) }}
+        group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg libxml2-utils
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus0
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ needs.prepare.outputs.python_version }}
+          uv-version: ${{ needs.prepare.outputs.uv_version }}
+          python-cache-key: ${{ needs.prepare.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutation
+          path: mutation
+      - name: Apply mutants and run the group
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: |
+          . venv/bin/activate
+          python3 -m script.translations develop --all
+          python -m script.trace.mutate apply mutation ${{ matrix.batch }}
+          mkdir -p junit
+          python3 -b -X dev -m pytest -qq --timeout=30 --numprocesses logical --dist=loadfile \
+            -o console_output_style=count -p no:sugar -p no:cacheprovider \
+            --junitxml=junit/junit-b${{ matrix.batch }}-g${{ matrix.group }}.xml -o junit_family=legacy \
+            $(sed -n "${{ matrix.group }},1p" mutation/pytest_buckets.txt) > junit/out.txt 2>&1 || true
+          tail -2 junit/out.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-b${{ matrix.batch }}-g${{ matrix.group }}
+          path: junit/*.xml
+
+  analyze:
+    needs: run
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutation
+          path: mutation
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: junit-*
+          path: junit
+      - uses: actions/download-artifact@v4
+        with:
+          name: analysis
+          path: runtime
+          run-id: ${{ inputs.runtime_run_id }}
+          github-token: ${{ github.token }}
+      - run: |
+          gunzip mutation/static.json.gz
+          python3 script/trace/safety.py --junit junit --mutation mutation --static mutation/static.json \
+            --runtime runtime/map_testfiles.json.gz --out safety.json
+          mkdir -p out && cp safety.json mutation/mutants.json mutation/batches.json out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safety
+          path: out/
