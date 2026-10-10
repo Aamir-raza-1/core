@@ -192,7 +192,18 @@ def main():
         },
         "packages_by_tests": sorted(((k[4:], len(v)) for k, v in by_file.items() if k.startswith("pkg:")), key=lambda kv: -kv[1])[:25],
     }
+    # Real time per test file (junit.xml from the traced run), to weight savings by seconds, not file counts.
+    import xml.etree.ElementTree as ET
+    file_seconds = collections.Counter()
+    for gdir in sorted(glob.glob(os.path.join(args.artifacts, "trace-group-*"))):
+        jx = os.path.join(gdir, "junit.xml")
+        if os.path.exists(jx):
+            for tc in ET.parse(jx).getroot().iter("testcase"):
+                f = tc.get("file") or tc.get("classname", "").replace(".", "/") + ".py"
+                file_seconds[f] += float(tc.get("time") or 0)
     os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "test_file_seconds.json"), "w") as f:
+        json.dump(dict(file_seconds), f)
     with open(os.path.join(args.out, "report.json"), "w") as f:
         json.dump(report, f, indent=2, default=list)
         f.write("\n")

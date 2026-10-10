@@ -131,8 +131,17 @@ def apply(out: str, batch: int) -> None:
         print(f"  - {m['old'].strip()}\n  + {m['new'].strip()}")
 
 
+def apply_ids(out: str, ids: list[int]) -> None:
+    """Apply specific mutants regardless of batch (for isolated re-runs)."""
+    batches = json.loads(Path(out, "batches.json").read_text())
+    Path(out, "batches.json").write_text(json.dumps(batches + [ids]))
+    apply(out, len(batches))
+
+
 if __name__ == "__main__":
-    if sys.argv[1] == "generate":
+    if sys.argv[1] == "apply-ids":
+        apply_ids(sys.argv[2], [int(x) for x in sys.argv[3].split(",") if x])
+    elif sys.argv[1] == "generate":
         generate(sys.argv[2], int(sys.argv[sys.argv.index("--seed") + 1]), sys.argv[sys.argv.index("--out") + 1])
     else:
         apply(sys.argv[2], int(sys.argv[3]))

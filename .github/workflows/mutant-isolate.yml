@@ -1,0 +1,81 @@
+name: Isolate mutants (resolve ambiguous failures)
+
+# Applies ONE mutant at a time (0 = none) and runs the given tests N times,
+# to resolve which planted bug made a test fail, and whether the test is flaky.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mutation_run_id:
+        description: Run ID of the safety-mutation run (for its mutants.json)
+        default: "37971499115"
+      mutants:
+        description: JSON list of mutant ids, 0 = baseline
+        default: "[0, 4, 18, 20]"
+      tests:
+        description: Test paths
+        default: tests/components/esphome/test_water_heater.py tests/components/mqtt/test_water_heater.py
+      repeats:
+        default: "3"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  UV_CACHE_DIR: /tmp/uv-cache
+  APT_CACHE_VERSION: 1
+
+jobs:
+  run:
+    name: Mutant ${{ matrix.mutant }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mutant: ${{ fromJson(inputs.mutants) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg libxml2-utils
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus0
+      - id: info
+        run: |
+          echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
+          echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+          echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ steps.info.outputs.python_version }}
+          uv-version: ${{ steps.info.outputs.uv_version }}
+          python-cache-key: ${{ steps.info.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutation
+          path: mutation
+          run-id: ${{ inputs.mutation_run_id }}
+          github-token: ${{ github.token }}
+      - name: Apply mutant and run tests N times
+        env:
+          TESTS: ${{ inputs.tests }}
+          REPEATS: ${{ inputs.repeats }}
+          MUTANT: ${{ matrix.mutant }}
+        run: |
+          . venv/bin/activate
+          python3 -m script.translations develop --all > /dev/null
+          if [ "$MUTANT" != "0" ]; then python -m script.trace.mutate apply-ids mutation "$MUTANT"; fi
+          mkdir -p out
+          for i in $(seq 1 "$REPEATS"); do
+            python3 -b -X dev -m pytest -qq --timeout=30 -p no:sugar -p no:cacheprovider \
+              --junitxml=out/junit-m${MUTANT}-r${i}.xml -o junit_family=legacy $TESTS > out/run-${i}.txt 2>&1 || true
+            echo "repeat $i: $(tail -1 out/run-${i}.txt)"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isolate-m${{ matrix.mutant }}
+          path: out/*.xml
