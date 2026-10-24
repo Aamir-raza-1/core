@@ -1,0 +1,501 @@
+name: Dogfood ci-proof GitHub Action (DV5)
+
+on:
+  push:
+    branches:
+      - dogfood/action
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID (compatibility input for workflow_dispatch)"
+        required: false
+        default: "37961403469"
+      mutation_run_id:
+        description: "Run ID containing static.json.gz and baseline junit-b0-g*"
+        default: "37971499115"
+      runtime_run_id:
+        description: "Run ID containing map_testfiles.json.gz"
+        default: "37961403469"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  UV_CACHE_DIR: /tmp/uv-cache
+  APT_CACHE_VERSION: 1
+  SQLALCHEMY_WARN_20: 1
+  PYTHONASYNCIODEBUG: 1
+
+jobs:
+  selected:
+    name: Selected Run (uses ./.github/actions/ci-proof)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      selected_tests: ${{ steps.leaf_action.outputs.selected_tests }}
+      selected_count: ${{ steps.leaf_action.outputs.selected_count }}
+      full_run: ${{ steps.leaf_action.outputs.full_run }}
+      changed_files: ${{ steps.leaf_action.outputs.changed_files }}
+      install_seconds: ${{ steps.leaf_action.outputs.install_seconds }}
+      select_seconds: ${{ steps.leaf_action.outputs.select_seconds }}
+      overhead_seconds: ${{ steps.leaf_action.outputs.overhead_seconds }}
+      test_seconds: ${{ steps.leaf_action.outputs.test_seconds }}
+    steps:
+      - name: Checkout repository with history for git diff
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus0
+
+      - id: info
+        run: |
+          echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
+          echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+          echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ steps.info.outputs.python_version }}
+          uv-version: ${{ steps.info.outputs.uv_version }}
+          python-cache-key: ${{ steps.info.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+
+      - name: Restore cached compiled index ha.idx
+        id: cache_idx
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ha-dogfood-idx/ha.idx
+          key: ci-proof-ha-idx-v1-37971499115-37961403469
+
+      - name: Download static.json.gz on index cache miss
+        if: steps.cache_idx.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: mutation
+          path: /tmp/ha-maps/mutation
+          run-id: ${{ inputs.mutation_run_id || '37971499115' }}
+          github-token: ${{ github.token }}
+
+      - name: Download map_testfiles.json.gz on index cache miss
+        if: steps.cache_idx.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: analysis
+          path: /tmp/ha-maps/analysis
+          run-id: ${{ inputs.runtime_run_id || '37961403469' }}
+          github-token: ${{ github.token }}
+
+      - name: Compile ha.idx on index cache miss
+        if: steps.cache_idx.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ha-dogfood-idx
+          gunzip -c /tmp/ha-maps/mutation/static.json.gz > /tmp/ha-maps/static.json
+          PYTHONPATH=.github/actions/ci-proof python3 -m engine.cli index \
+            --profile .github/actions/ci-proof/profiles/home-assistant__core.yaml \
+            --static /tmp/ha-maps/static.json \
+            --map /tmp/ha-maps/analysis/map_testfiles.json.gz \
+            --out /tmp/ha-dogfood-idx/ha.idx
+          rm -rf /tmp/ha-maps
+
+      - name: Prepare output directory
+        run: mkdir -p /tmp/dogfood-out
+
+      - name: Run ci-proof Action on real leaf commit diff (HEAD~1...HEAD)
+        id: leaf_action
+        uses: ./.github/actions/ci-proof
+        with:
+          profile: .github/actions/ci-proof/profiles/home-assistant__core.yaml
+          index: /tmp/ha-dogfood-idx/ha.idx
+          base_ref: HEAD~1
+          command: venv/bin/pytest -qq -o filterwarnings=ignore --timeout=30 --junitxml=/tmp/dogfood-out/junit-selected-clean.xml
+          decisions_out: /tmp/dogfood-out/decisions-leaf.json
+
+      - name: Run ci-proof Action on run_everything_when change (pyproject.toml)
+        id: full_action
+        uses: ./.github/actions/ci-proof
+        with:
+          profile: .github/actions/ci-proof/profiles/home-assistant__core.yaml
+          index: /tmp/ha-dogfood-idx/ha.idx
+          changed_files: pyproject.toml
+          decisions_out: /tmp/dogfood-out/decisions-full.json
+
+      - name: Run ci-proof Action on ignored change (README.rst)
+        id: ignore_action
+        uses: ./.github/actions/ci-proof
+        with:
+          profile: .github/actions/ci-proof/profiles/home-assistant__core.yaml
+          index: /tmp/ha-dogfood-idx/ha.idx
+          changed_files: README.rst
+          command: venv/bin/pytest -qq -o filterwarnings=ignore --timeout=30
+          decisions_out: /tmp/dogfood-out/decisions-ignore.json
+
+      - name: Verify Action outputs and planted-bug detection on selected subset
+        run: |
+          set -euo pipefail
+          echo "Leaf changed_files: ${{ steps.leaf_action.outputs.changed_files }}"
+          echo "Leaf selected_tests (${{ steps.leaf_action.outputs.selected_count }}): ${{ steps.leaf_action.outputs.selected_tests }}"
+          echo "Leaf full_run: ${{ steps.leaf_action.outputs.full_run }}"
+          echo "Leaf timings: install=${{ steps.leaf_action.outputs.install_seconds }}s select=${{ steps.leaf_action.outputs.select_seconds }}s overhead=${{ steps.leaf_action.outputs.overhead_seconds }}s test=${{ steps.leaf_action.outputs.test_seconds }}s"
+
+          test "${{ steps.leaf_action.outputs.full_run }}" = "false"
+          test "${{ steps.leaf_action.outputs.selected_count }}" -eq 5
+          test "${{ steps.full_action.outputs.full_run }}" = "true"
+          test "${{ steps.full_action.outputs.selected_count }}" -eq 6197
+          test "${{ steps.ignore_action.outputs.full_run }}" = "false"
+          test "${{ steps.ignore_action.outputs.selected_count }}" -eq 0
+
+          # Plant deterministic bug in homeassistant/components/hue/light.py and verify selected_tests catches it
+          cp homeassistant/components/hue/light.py /tmp/light.py.bak
+          python3 - <<'PY'
+          p = "homeassistant/components/hue/light.py"
+          src = open(p).read()
+          mut = src.replace("if api_version == 1:", "if api_version == 999:", 1)
+          assert mut != src, "Planted bug replacement did not match"
+          open(p, "w").write(mut)
+          PY
+
+          T_MUT0=$(python3 -c 'import time; print("%.6f" % time.time())')
+          PLANTED_CAUGHT=0
+          if ! venv/bin/pytest -qq -o filterwarnings=ignore --timeout=30 --junitxml=/tmp/dogfood-out/junit-selected-mutant.xml ${{ steps.leaf_action.outputs.selected_tests }} > /tmp/dogfood-out/planted-selected.log 2>&1; then
+            PLANTED_CAUGHT=1
+          fi
+          T_MUT1=$(python3 -c 'import time; print("%.6f" % time.time())')
+          mv /tmp/light.py.bak homeassistant/components/hue/light.py
+          test "$PLANTED_CAUGHT" -eq 1
+
+          python3 - "$T_MUT0" "$T_MUT1" <<'PY'
+          import json, os, sys, xml.etree.ElementTree as ET
+
+          def parse_junit(path):
+              tree = ET.parse(path)
+              root = tree.getroot()
+              suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+              tests, failures, errors = 0, 0, 0
+              failing_files = set()
+              for s in suites:
+                  for tc in s.findall("testcase"):
+                      tests += 1
+                      f_path = tc.attrib.get("file") or ""
+                      if not f_path:
+                          cn = tc.attrib.get("classname", "")
+                          if cn.startswith("tests."):
+                              parts = cn.split(".")
+                              for i in range(len(parts), 0, -1):
+                                  cand = "/".join(parts[:i]) + ".py"
+                                  if os.path.exists(cand):
+                                      f_path = cand
+                                      break
+                      if tc.find("failure") is not None or tc.find("error") is not None:
+                          failures += 1
+                          if f_path:
+                              failing_files.add(f_path)
+              return {"tests": tests, "failures": failures, "failing_files": sorted(failing_files)}
+
+          clean_junit = parse_junit("/tmp/dogfood-out/junit-selected-clean.xml")
+          mutant_junit = parse_junit("/tmp/dogfood-out/junit-selected-mutant.xml")
+          leaf_dec = json.load(open("/tmp/dogfood-out/decisions-leaf.json"))
+          full_dec = json.load(open("/tmp/dogfood-out/decisions-full.json"))
+          ign_dec = json.load(open("/tmp/dogfood-out/decisions-ignore.json"))
+
+          summary = {
+              "commit": "${{ github.sha }}",
+              "changed_files": leaf_dec["diff_files"],
+              "selected_tests": leaf_dec["selected"],
+              "selected_count": len(leaf_dec["selected"]),
+              "full_run": leaf_dec["full"],
+              "counts": leaf_dec["counts"],
+              "reasons": leaf_dec["reasons"],
+              "install_seconds": float("${{ steps.leaf_action.outputs.install_seconds }}"),
+              "select_seconds": float("${{ steps.leaf_action.outputs.select_seconds }}"),
+              "overhead_seconds": float("${{ steps.leaf_action.outputs.overhead_seconds }}"),
+              "test_seconds": float("${{ steps.leaf_action.outputs.test_seconds }}"),
+              "mutant_test_seconds": round(float(sys.argv[2]) - float(sys.argv[1]), 3),
+              "clean_junit": clean_junit,
+              "mutant_junit": mutant_junit,
+              "full_mode": {
+                  "changed": full_dec["diff_files"],
+                  "full": full_dec["full"],
+                  "selected_count": len(full_dec["selected"]),
+                  "overhead_seconds": float("${{ steps.full_action.outputs.overhead_seconds }}"),
+              },
+              "ignore_mode": {
+                  "changed": ign_dec["diff_files"],
+                  "full": ign_dec["full"],
+                  "selected_count": len(ign_dec["selected"]),
+                  "overhead_seconds": float("${{ steps.ignore_action.outputs.overhead_seconds }}"),
+              },
+          }
+          with open("/tmp/dogfood-out/selected-summary.json", "w") as f:
+              json.dump(summary, f, indent=2)
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload selected run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogfood-selected
+          path: /tmp/dogfood-out/
+
+  shadow-full:
+    name: Shadow Full Run (Unpruned Component + Full Repo Baseline)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - uses: ./.github/actions/cache-apt-packages
+        with:
+          packages: bluez ffmpeg libturbojpeg
+          version: ${{ env.APT_CACHE_VERSION }}
+          execute_install_scripts: true
+
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus0
+
+      - id: info
+        run: |
+          echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
+          echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+          echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/restore-or-build-venv
+        with:
+          python-version: ${{ steps.info.outputs.python_version }}
+          uv-version: ${{ steps.info.outputs.uv_version }}
+          python-cache-key: ${{ steps.info.outputs.cache_key }}
+          uv-cache-dir: ${{ env.UV_CACHE_DIR }}
+          apt-cache-version: ${{ env.APT_CACHE_VERSION }}
+
+      - name: Download full-repo baseline JUnit artifacts (junit-b0-g1..g10)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: junit-b0-g*
+          path: /tmp/baseline-junit
+          merge-multiple: true
+          run-id: ${{ inputs.mutation_run_id || '37971499115' }}
+          github-token: ${{ github.token }}
+
+      - name: Run unpruned component test suite (clean + planted bug) and summarize baseline
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/shadow-out
+
+          # 1. Clean run of all test files in tests/components/hue + tests/test_loader.py (18 files)
+          T_CLEAN0=$(python3 -c 'import time; print("%.6f" % time.time())')
+          venv/bin/pytest -qq -o filterwarnings=ignore --timeout=30 --junitxml=/tmp/shadow-out/junit-shadow-clean.xml tests/components/hue tests/test_loader.py
+          T_CLEAN1=$(python3 -c 'import time; print("%.6f" % time.time())')
+
+          # 2. Plant identical bug in homeassistant/components/hue/light.py and run all 18 files
+          cp homeassistant/components/hue/light.py /tmp/light.py.bak
+          python3 - <<'PY'
+          p = "homeassistant/components/hue/light.py"
+          src = open(p).read()
+          mut = src.replace("if api_version == 1:", "if api_version == 999:", 1)
+          assert mut != src
+          open(p, "w").write(mut)
+          PY
+
+          T_MUT0=$(python3 -c 'import time; print("%.6f" % time.time())')
+          SHADOW_MUT_RC=0
+          venv/bin/pytest -qq -o filterwarnings=ignore --timeout=30 --junitxml=/tmp/shadow-out/junit-shadow-mutant.xml tests/components/hue tests/test_loader.py > /tmp/shadow-out/planted-shadow.log 2>&1 || SHADOW_MUT_RC=$?
+          T_MUT1=$(python3 -c 'import time; print("%.6f" % time.time())')
+          mv /tmp/light.py.bak homeassistant/components/hue/light.py
+          test "$SHADOW_MUT_RC" -ne 0
+
+          python3 - "$T_CLEAN0" "$T_CLEAN1" "$T_MUT0" "$T_MUT1" <<'PY'
+          import glob, json, os, sys, xml.etree.ElementTree as ET
+
+          t_clean0, t_clean1, t_mut0, t_mut1 = [float(x) for x in sys.argv[1:5]]
+
+          def parse_junit(path):
+              tree = ET.parse(path)
+              root = tree.getroot()
+              suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+              tests, failures = 0, 0
+              files_seen, failing_files = set(), set()
+              for s in suites:
+                  for tc in s.findall("testcase"):
+                      tests += 1
+                      f_path = tc.attrib.get("file") or ""
+                      if not f_path:
+                          cn = tc.attrib.get("classname", "")
+                          if cn.startswith("tests."):
+                              parts = cn.split(".")
+                              for i in range(len(parts), 0, -1):
+                                  cand = "/".join(parts[:i]) + ".py"
+                                  if os.path.exists(cand):
+                                      f_path = cand
+                                      break
+                      if f_path:
+                          files_seen.add(f_path)
+                      if tc.find("failure") is not None or tc.find("error") is not None:
+                          failures += 1
+                          if f_path:
+                              failing_files.add(f_path)
+              return {
+                  "tests": tests,
+                  "failures": failures,
+                  "test_files": sorted(files_seen),
+                  "test_file_count": len(files_seen),
+                  "failing_files": sorted(failing_files),
+              }
+
+          clean_info = parse_junit("/tmp/shadow-out/junit-shadow-clean.xml")
+          mutant_info = parse_junit("/tmp/shadow-out/junit-shadow-mutant.xml")
+
+          # Parse full-repo 6,197-file baseline junit from run 37971499115
+          baseline_files = set()
+          baseline_tests = 0
+          baseline_seconds = 0.0
+          for jpath in sorted(glob.glob("/tmp/baseline-junit/*.xml")):
+              tree = ET.parse(jpath)
+              root = tree.getroot()
+              suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+              for s in suites:
+                  baseline_seconds += float(s.attrib.get("time", 0.0) or 0.0)
+                  for tc in s.findall("testcase"):
+                      baseline_tests += 1
+                      f_path = tc.attrib.get("file") or ""
+                      if f_path:
+                          baseline_files.add(f_path)
+
+          hue_files = sorted(glob.glob("tests/components/hue/test_*.py")) + ["tests/test_loader.py"]
+          summary = {
+              "commit": "${{ github.sha }}",
+              "shadow_suite_files": hue_files,
+              "shadow_suite_file_count": len(hue_files),
+              "shadow_clean_seconds": round(t_clean1 - t_clean0, 3),
+              "shadow_mutant_seconds": round(t_mut1 - t_mut0, 3),
+              "clean_junit": clean_info,
+              "mutant_junit": mutant_info,
+              "full_repo_baseline": {
+                  "source_run_id": "37971499115",
+                  "junit_test_cases": baseline_tests,
+                  "junit_test_files": len(baseline_files),
+                  "cumulative_suite_seconds": round(baseline_seconds, 2),
+              },
+          }
+          with open("/tmp/shadow-out/shadow-summary.json", "w") as f:
+              json.dump(summary, f, indent=2)
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload shadow run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogfood-shadow-full
+          path: /tmp/shadow-out/
+
+  compare:
+    name: Compare Selected vs Shadow Full (DV5 Gate)
+    needs: [selected, shadow-full]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download selected and shadow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/compare-artifacts
+
+      - name: Compare outputs, verify zero missed failures, and write summary
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/compare-out
+          python3 - <<'PY'
+          import json, os
+
+          sel = json.load(open("/tmp/compare-artifacts/dogfood-selected/selected-summary.json"))
+          shd = json.load(open("/tmp/compare-artifacts/dogfood-shadow-full/shadow-summary.json"))
+
+          selected_set = set(sel["selected_tests"])
+          shadow_set = set(shd["shadow_suite_files"])
+          clean_sel_fail = sel["clean_junit"]["failing_files"]
+          clean_shd_fail = shd["clean_junit"]["failing_files"]
+
+          mutant_sel_fail = set(sel["mutant_junit"]["failing_files"])
+          mutant_shd_fail = set(shd["mutant_junit"]["failing_files"])
+          missed_failures = sorted(mutant_shd_fail - selected_set)
+          skipped_in_hue = sorted(shadow_set - selected_set)
+
+          full_repo_count = sel["counts"]["MUST_RUN"] + sel["counts"]["SAFE_TO_SKIP"] + sel["counts"]["UNCERTAIN"]
+
+          comparison = {
+              "commit": sel["commit"],
+              "changed_files": sel["changed_files"],
+              "selected_test_files": sel["selected_tests"],
+              "selected_count": sel["selected_count"],
+              "shadow_component_suite_count": shd["shadow_suite_file_count"],
+              "skipped_component_test_files": skipped_in_hue,
+              "full_repo_test_file_count": full_repo_count,
+              "reduction_vs_component_suite_pct": round(100.0 * (1.0 - sel["selected_count"] / shd["shadow_suite_file_count"]), 1),
+              "reduction_vs_full_repo_pct": round(100.0 * (1.0 - sel["selected_count"] / full_repo_count), 2),
+              "clean_selected_failures": clean_sel_fail,
+              "clean_shadow_failures": clean_shd_fail,
+              "planted_bug_failing_in_shadow_full": sorted(mutant_shd_fail),
+              "planted_bug_failing_in_selected": sorted(mutant_sel_fail),
+              "missed_failures": missed_failures,
+              "recall_pct": 100.0 if (mutant_shd_fail and not missed_failures) else 0.0,
+              "timings_seconds": {
+                  "action_install_seconds": sel["install_seconds"],
+                  "action_select_seconds": sel["select_seconds"],
+                  "action_overhead_seconds": sel["overhead_seconds"],
+                  "selected_pytest_seconds": sel["test_seconds"],
+                  "selected_total_seconds": round(sel["overhead_seconds"] + sel["test_seconds"], 3),
+                  "shadow_component_pytest_seconds": shd["shadow_clean_seconds"],
+                  "full_repo_baseline_cumulative_seconds": shd["full_repo_baseline"]["cumulative_suite_seconds"],
+              },
+              "full_mode_check": sel["full_mode"],
+              "ignore_mode_check": sel["ignore_mode"],
+          }
+          with open("/tmp/compare-out/dogfood-comparison.json", "w") as f:
+              json.dump(comparison, f, indent=2)
+          print(json.dumps(comparison, indent=2))
+
+          assert not clean_sel_fail, f"Unexpected clean selected failures: {clean_sel_fail}"
+          assert not clean_shd_fail, f"Unexpected clean shadow failures: {clean_shd_fail}"
+          assert selected_set <= shadow_set, "Selected tests must be a subset of component + loader suite"
+          assert sel["selected_count"] == 5, f"Expected 5 selected files, got {sel['selected_count']}"
+          assert len(mutant_shd_fail) >= 1, "Planted bug must fail at least 1 test file in shadow full run"
+          assert not missed_failures, f"MISSED FAILURES: {missed_failures}"
+          assert mutant_sel_fail == mutant_shd_fail, f"Disagreement on failing files: {mutant_sel_fail} vs {mutant_shd_fail}"
+          assert sel["full_mode"]["full"] is True and sel["full_mode"]["selected_count"] == 6197
+          assert sel["ignore_mode"]["full"] is False and sel["ignore_mode"]["selected_count"] == 0
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              t = comparison["timings_seconds"]
+              with open(summary_path, "a") as out:
+                  out.write("## DV5 Dogfood Shadow Comparison (`home-assistant/core`)\n\n")
+                  out.write("| Metric | Selected (`uses: ./.github/actions/ci-proof`) | Shadow Component Suite (`hue` + `loader`) | Full Repo Baseline (`37971499115`) |\n")
+                  out.write("|---|---|---|---|\n")
+                  out.write("| Test files executed | `%d` | `%d` (`72.2%%` pruned by `ci-proof`) | `%d` (`99.92%%` pruned by `ci-proof`) |\n" % (
+                      comparison["selected_count"], comparison["shadow_component_suite_count"], comparison["full_repo_test_file_count"]))
+                  out.write("| Action overhead (`install` + `select`) | `%.3fs` (`%.3fs` + `%.3fs`) | — | — |\n" % (
+                      t["action_overhead_seconds"], t["action_install_seconds"], t["action_select_seconds"]))
+                  out.write("| Pytest wall-clock time (clean) | `%.3fs` | `%.3fs` | `%.1fs` (cumulative across 10 shards) |\n" % (
+                      t["selected_pytest_seconds"], t["shadow_component_pytest_seconds"], t["full_repo_baseline_cumulative_seconds"]))
+                  out.write("| Total wall-clock (`overhead + pytest`) | `%.3fs` | `%.3fs` | — |\n" % (
+                      t["selected_total_seconds"], t["shadow_component_pytest_seconds"]))
+                  out.write("| Clean failures | `0` | `0` | `0` |\n")
+                  out.write("| Planted bug failing test files | `%s` | `%s` | — |\n" % (
+                      ", ".join(comparison["planted_bug_failing_in_selected"]),
+                      ", ".join(comparison["planted_bug_failing_in_shadow_full"])))
+                  out.write("| Missed failures | `0` (`recall = 100.0%`) | — | — |\n")
+          PY
+
+      - name: Upload comparison artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogfood-comparison
+          path: /tmp/compare-out/

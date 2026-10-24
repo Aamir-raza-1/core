@@ -1,0 +1,40 @@
+# Profile: home-assistant/core — written from what we read and measured in Stage 0.
+# A10: engine/select.py reads every selection rule from here (no HA rules in engine code).
+repo: home-assistant/core
+language: python
+language_confidence: read
+test_runner: pytest
+test_command: "python3 -b -X dev -m pytest -qq --timeout=9 --numprocesses logical --dist=loadfile -p no:sugar"
+setup:
+  os_packages: [bluez, ffmpeg, libturbojpeg, libxml2-utils, libopus0]
+  toolchain: "python from .python-version (3.14.5); uv from requirements.txt"
+  install: "HA action .github/actions/restore-or-build-venv"
+  pre_test: "python3 -m script.translations develop --all"
+  services: []
+source_roots: [homeassistant]
+test_roots: [tests]
+area_rule: "homeassistant/components/{name}/** -> tests/components/{name}/"
+run_everything_when:
+  - pyproject.toml
+  - requirements.txt
+  - requirements_test.txt
+  - setup.cfg
+  - homeassistant/package_constraints.txt
+dependency_manifests: ["homeassistant/components/*/manifest.json"]
+# a change to these alone runs the tests of the areas whose manifest changed in the same PR; no manifest changed -> full
+dependency_lockfiles: ["requirements_all*", "requirements_test_all*"]
+tooling_scopes:
+  "pylint/**": "tests/pylint/"
+  "script/**": ["tests/script/", "tests/hassfest/"]
+generated_files: ["homeassistant/generated/**"]
+ignore: [CODEOWNERS, .strict-typing, .pre-commit-config.yaml, ".github/**", "docs/**", ".devcontainer/**", ".vscode/**", mypy.ini, .core_files.yaml, "**/*.md"]
+ci:
+  provider: github_actions
+  workflow: .github/workflows/ci.yaml
+  full_run_marker: "job 'Split tests for full run' ran"
+existing_selection: "dorny/paths-filter + script/gen_integration_paths.py (integration + manifest deps + direct imports); 157 .core_files.yaml patterns force the full suite"
+trace:
+  coverage_core: ctrace
+  runner_root: /home/runner/work/core/core/
+  process_names: [python]
+notes: "Measured: −26% on 40 full-suite PRs (config-fixable ~19%, tool-only ~7%); 0 misses on 21 planted bugs."
