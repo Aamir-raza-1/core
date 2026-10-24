@@ -1,0 +1,14 @@
+.git
+.claude
+data
+experiments
+__pycache__
+*.pyc
+*.pyo
+results
+reports
+state
+cards
+knowledge
+prompts
+tools

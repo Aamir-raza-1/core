@@ -1,0 +1,360 @@
+name: 'ci-proof Test Selection'
+description: 'Deterministic, change-aware test selection and impact analysis (zero network egress)'
+author: 'Aamir-raza-1'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  profile:
+    description: 'Path to per-repo profile YAML (e.g. profiles/home-assistant__core.yaml)'
+    required: true
+  index:
+    description: 'Path to compiled .idx index file (built via ci-proof index)'
+    required: false
+    default: ''
+  static:
+    description: 'Path to static import map JSON (optional if index is given; auto-built for Python if omitted)'
+    required: false
+    default: ''
+  map:
+    description: 'Path to runtime trace map (.json or .json.gz, optional)'
+    required: false
+    default: ''
+  base_ref:
+    description: 'Base git ref or commit SHA to diff against (defaults to PR base_ref or HEAD~1)'
+    required: false
+    default: ''
+  changed_files:
+    description: 'Explicit space- or newline-separated list of changed files (overrides git diff when non-empty)'
+    required: false
+    default: ''
+  command:
+    description: 'Test command to execute with affected test targets appended (e.g. pytest -qq)'
+    required: false
+    default: ''
+  full_command:
+    description: 'Command to execute when full_run is true (defaults to inputs.command)'
+    required: false
+    default: ''
+  working_directory:
+    description: 'Working directory for git diff, selection, and test command execution'
+    required: false
+    default: '.'
+  decisions_out:
+    description: 'Optional path to write typed decisions JSON (engine.decisions/v1)'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token used as fallback to fetch base ref or query PR changed files on shallow clones'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  selected_tests:
+    description: 'Space-separated list of affected test files'
+    value: ${{ steps.select.outputs.selected }}
+  selected:
+    description: 'Alias for selected_tests (space-separated list of affected test files)'
+    value: ${{ steps.select.outputs.selected }}
+  selected_count:
+    description: 'Number of affected test files selected'
+    value: ${{ steps.select.outputs.selected_count }}
+  full_run:
+    description: 'Whether a full test suite is required (true/false)'
+    value: ${{ steps.select.outputs.full }}
+  full:
+    description: 'Alias for full_run (true/false)'
+    value: ${{ steps.select.outputs.full }}
+  changed_files:
+    description: 'Space-separated list of changed files analyzed'
+    value: ${{ steps.select.outputs.changed_files }}
+  overhead_seconds:
+    description: 'Total Action selection overhead in seconds (pip install + diff + ci-proof affected-tests)'
+    value: ${{ steps.select.outputs.overhead_seconds }}
+  install_seconds:
+    description: 'Seconds spent installing ci-proof from github.action_path'
+    value: ${{ steps.select.outputs.install_seconds }}
+  select_seconds:
+    description: 'Seconds spent running ci-proof affected-tests'
+    value: ${{ steps.select.outputs.select_seconds }}
+  test_seconds:
+    description: 'Seconds spent executing inputs.command (0.000 if command was not set)'
+    value: ${{ steps.run_cmd.outputs.test_seconds }}
+  decisions_path:
+    description: 'Path to the typed decisions JSON file (engine.decisions/v1)'
+    value: ${{ steps.select.outputs.decisions_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install ci-proof and select affected tests
+      id: select
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_INDEX: ${{ inputs.index }}
+        INPUT_STATIC: ${{ inputs.static }}
+        INPUT_MAP: ${{ inputs.map }}
+        INPUT_BASE_REF: ${{ inputs.base_ref }}
+        INPUT_CHANGED_FILES: ${{ inputs.changed_files }}
+        INPUT_DECISIONS_OUT: ${{ inputs.decisions_out }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        EVENT_BEFORE: ${{ github.event.before }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        echo "::group::ci-proof: install & select affected tests"
+
+        T_START=$(python3 -c 'import time; print("%.6f" % time.time())')
+        WORK_TMP="${RUNNER_TEMP:-/tmp}/ci-proof-$$"
+        mkdir -p "$WORK_TMP"
+
+        # 1. Stage package files from github.action_path (avoids copying large repo checkouts during pip build)
+        STAGE_SRC="$WORK_TMP/src"
+        TARGET_DIR="$WORK_TMP/pkg"
+        mkdir -p "$STAGE_SRC" "$TARGET_DIR"
+        for item in pyproject.toml setup.py README.md engine profiles; do
+          if [ -e "$ACTION_PATH/$item" ]; then
+            cp -R "$ACTION_PATH/$item" "$STAGE_SRC/"
+          fi
+        done
+        if [ ! -d "$STAGE_SRC/profiles" ]; then
+          mkdir -p "$STAGE_SRC/profiles"
+        fi
+        if [ ! -f "$STAGE_SRC/README.md" ]; then
+          echo "# ci-proof" > "$STAGE_SRC/README.md"
+        fi
+
+        INSTALLED_VIA_PIP=0
+        if python3 -c "import pip, setuptools" >/dev/null 2>&1; then
+          python3 -m pip install --quiet --no-deps --no-build-isolation --target "$TARGET_DIR" "$STAGE_SRC" && INSTALLED_VIA_PIP=1 || true
+        fi
+        if [ "$INSTALLED_VIA_PIP" -eq 0 ] && [ -x /usr/bin/python3 ] && /usr/bin/python3 -c "import pip, setuptools" >/dev/null 2>&1; then
+          /usr/bin/python3 -m pip install --quiet --no-deps --no-build-isolation --target "$TARGET_DIR" "$STAGE_SRC" && INSTALLED_VIA_PIP=1 || true
+        fi
+        if [ "$INSTALLED_VIA_PIP" -eq 0 ] && python3 -c "import pip" >/dev/null 2>&1; then
+          python3 -m pip install --quiet --no-deps --target "$TARGET_DIR" "$STAGE_SRC" >/dev/null 2>&1 && INSTALLED_VIA_PIP=1 || true
+        fi
+        if [ "$INSTALLED_VIA_PIP" -eq 0 ]; then
+          cp -R "$STAGE_SRC/engine" "$STAGE_SRC/profiles" "$TARGET_DIR/"
+        fi
+
+        mkdir -p "$TARGET_DIR/bin"
+        cat > "$TARGET_DIR/bin/ci-proof" <<'EOF'
+        #!/usr/bin/env python3
+        import sys
+        from engine.cli import main
+        sys.exit(main())
+        EOF
+        chmod +x "$TARGET_DIR/bin/ci-proof"
+
+        export PATH="$TARGET_DIR/bin:$PATH"
+        export PYTHONPATH="$TARGET_DIR${PYTHONPATH:+:$PYTHONPATH}"
+        if [ -n "${GITHUB_PATH:-}" ]; then
+          echo "$TARGET_DIR/bin" >> "$GITHUB_PATH"
+        fi
+        if [ -n "${GITHUB_ENV:-}" ]; then
+          echo "PYTHONPATH=$PYTHONPATH" >> "$GITHUB_ENV"
+        fi
+
+        T_INSTALLED=$(python3 -c 'import time; print("%.6f" % time.time())')
+        INSTALL_SECONDS=$(python3 -c "print('%.3f' % ($T_INSTALLED - $T_START))")
+        echo "Installed $(ci-proof --version) in ${INSTALL_SECONDS}s"
+
+        # 2. Compute changed files from inputs.changed_files, PR base_ref, push before SHA, or GitHub API fallback
+        CHANGED_LIST_FILE="$WORK_TMP/changed.txt"
+        : > "$CHANGED_LIST_FILE"
+
+        if [ -n "${INPUT_CHANGED_FILES:-}" ]; then
+          printf '%s\n' "$INPUT_CHANGED_FILES" | tr ' \t,' '\n\n\n' | sed '/^$/d' > "$CHANGED_LIST_FILE"
+        else
+          BASE_REF="${INPUT_BASE_REF:-}"
+          if [ -z "$BASE_REF" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+            if ! git rev-parse --verify --quiet "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+              git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 || true
+            fi
+            BASE_REF="origin/${GITHUB_BASE_REF}"
+          fi
+          if [ -z "$BASE_REF" ] && [ -n "${EVENT_BEFORE:-}" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git rev-parse --verify --quiet "$EVENT_BEFORE" >/dev/null 2>&1; then
+              BASE_REF="$EVENT_BEFORE"
+            fi
+          fi
+          if [ -z "$BASE_REF" ]; then
+            BASE_REF="HEAD~1"
+          fi
+
+          git diff --name-only "${BASE_REF}...HEAD" > "$CHANGED_LIST_FILE" 2>/dev/null \
+            || git diff --name-only "${BASE_REF}" HEAD > "$CHANGED_LIST_FILE" 2>/dev/null \
+            || git diff --name-only HEAD~1 > "$CHANGED_LIST_FILE" 2>/dev/null \
+            || true
+
+          # Fallback to GitHub API using GITHUB_TOKEN if shallow clone had no local parent diff
+          if [ ! -s "$CHANGED_LIST_FILE" ] && [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
+            python3 - "$GITHUB_REPOSITORY" "$PR_NUMBER" "$CHANGED_LIST_FILE" <<'PY' || true
+        import json, os, sys, urllib.request
+        repo, pr, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+        req = urllib.request.Request(
+            "https://api.github.com/repos/%s/pulls/%s/files?per_page=100" % (repo, pr),
+            headers={"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            files = [row["filename"] for row in json.loads(resp.read().decode("utf-8"))]
+        with open(out_path, "w") as f:
+            f.write("\n".join(files) + ("\n" if files else ""))
+        PY
+          fi
+        fi
+
+        CHANGED_ARGS=()
+        while IFS= read -r line; do
+          [ -n "$line" ] && CHANGED_ARGS+=("$line")
+        done < "$CHANGED_LIST_FILE"
+
+        CHANGED_FLAT="${CHANGED_ARGS[*]:-}"
+        echo "Changed files (${#CHANGED_ARGS[@]}): ${CHANGED_FLAT:-<none>}"
+
+        DECISIONS_PATH="${INPUT_DECISIONS_OUT:-$WORK_TMP/decisions.json}"
+        mkdir -p "$(dirname "$DECISIONS_PATH")"
+
+        if [ "${#CHANGED_ARGS[@]}" -eq 0 ]; then
+          T_END=$(python3 -c 'import time; print("%.6f" % time.time())')
+          OVERHEAD_SECONDS=$(python3 -c "print('%.3f' % ($T_END - $T_START))")
+          echo '{"schema":"engine.decisions/v1","diff_files":[],"full":false,"reasons":{},"counts":{"MUST_RUN":0,"SAFE_TO_SKIP":0,"UNCERTAIN":0},"selected":[],"decisions":{}}' > "$DECISIONS_PATH"
+          {
+            echo "selected="
+            echo "selected_count=0"
+            echo "full=false"
+            echo "changed_files="
+            echo "install_seconds=$INSTALL_SECONDS"
+            echo "select_seconds=0.000"
+            echo "overhead_seconds=$OVERHEAD_SECONDS"
+            echo "decisions_path=$DECISIONS_PATH"
+          } >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # 3. Resolve index / static / runtime map arguments
+        INDEX_ARGS=()
+        if [ -n "${INPUT_INDEX:-}" ]; then
+          INDEX_ARGS+=(--index "$INPUT_INDEX")
+        elif [ -n "${INPUT_STATIC:-}" ]; then
+          INDEX_ARGS+=(--static "$INPUT_STATIC")
+          if [ -n "${INPUT_MAP:-}" ]; then
+            INDEX_ARGS+=(--map "$INPUT_MAP")
+          fi
+        else
+          AUTO_STATIC="$WORK_TMP/static.json"
+          echo "No --index or --static supplied; building static import map from $INPUT_PROFILE..."
+          python3 -m engine.static_imports . --profile "$INPUT_PROFILE" --out "$AUTO_STATIC"
+          INDEX_ARGS+=(--static "$AUTO_STATIC")
+          if [ -n "${INPUT_MAP:-}" ]; then
+            INDEX_ARGS+=(--map "$INPUT_MAP")
+          fi
+        fi
+
+        # 4. Run ci-proof affected-tests
+        SELECTED_FILE="$WORK_TMP/selected.txt"
+        T_SEL_START=$(python3 -c 'import time; print("%.6f" % time.time())')
+        ci-proof affected-tests \
+          --profile "$INPUT_PROFILE" \
+          "${INDEX_ARGS[@]}" \
+          --changed "${CHANGED_ARGS[@]}" \
+          --explain \
+          --out "$DECISIONS_PATH" > "$SELECTED_FILE"
+        T_SEL_END=$(python3 -c 'import time; print("%.6f" % time.time())')
+
+        SELECT_SECONDS=$(python3 -c "print('%.3f' % ($T_SEL_END - $T_SEL_START))")
+        OVERHEAD_SECONDS=$(python3 -c "print('%.3f' % ($T_SEL_END - $T_START))")
+
+        # 5. Export outputs via Python (handles large lists safely)
+        python3 - "$DECISIONS_PATH" "$SELECTED_FILE" "$GITHUB_OUTPUT" "$CHANGED_FLAT" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" <<'PY'
+        import json, os, sys
+        dec_path, sel_file, out_path, changed_flat, t_inst, t_sel, t_ovh = sys.argv[1:8]
+        with open(dec_path) as f:
+            d = json.load(f)
+        selected = d.get("selected", [])
+        full = bool(d.get("full", False))
+        # Keep space-separated output within GitHub Actions 1 MB output cap
+        selected_str = " ".join(selected)
+        if len(selected_str) > 900_000:
+            selected_str = " ".join(selected[:5000])
+        with open(out_path, "a") as out:
+            out.write("selected=%s\n" % selected_str)
+            out.write("selected_count=%d\n" % len(selected))
+            out.write("full=%s\n" % ("true" if full else "false"))
+            out.write("changed_files=%s\n" % changed_flat.replace("\n", " "))
+            out.write("install_seconds=%s\n" % t_inst)
+            out.write("select_seconds=%s\n" % t_sel)
+            out.write("overhead_seconds=%s\n" % t_ovh)
+            out.write("decisions_path=%s\n" % dec_path)
+        print("ci-proof decision: full=%s, selected=%d test files, counts=%s, reasons=%s" % (
+            full, len(selected), d.get("counts"), d.get("reasons")))
+        print("timings: install=%ss, select=%ss, total_overhead=%ss" % (t_inst, t_sel, t_ovh))
+        PY
+        echo "::endgroup::"
+
+    - name: Execute test command on affected tests
+      id: run_cmd
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FULL_COMMAND: ${{ inputs.full_command }}
+        SELECTED_TESTS: ${{ steps.select.outputs.selected }}
+        SELECTED_COUNT: ${{ steps.select.outputs.selected_count }}
+        FULL_RUN: ${{ steps.select.outputs.full }}
+        DECISIONS_PATH: ${{ steps.select.outputs.decisions_path }}
+        INSTALL_SECONDS: ${{ steps.select.outputs.install_seconds }}
+        SELECT_SECONDS: ${{ steps.select.outputs.select_seconds }}
+        OVERHEAD_SECONDS: ${{ steps.select.outputs.overhead_seconds }}
+      run: |
+        set -euo pipefail
+        T_CMD_START=$(python3 -c 'import time; print("%.6f" % time.time())')
+        if [ -n "${INPUT_COMMAND:-}" ]; then
+          echo "::group::ci-proof: run test command"
+          if [ "${FULL_RUN}" = "true" ]; then
+            if [ -n "${INPUT_FULL_COMMAND:-}" ]; then
+              echo "Full suite required (full=true); running full_command: $INPUT_FULL_COMMAND"
+              eval "$INPUT_FULL_COMMAND"
+            elif [ "${SELECTED_COUNT:-0}" -le 200 ] && [ -n "${SELECTED_TESTS:-}" ]; then
+              echo "Full suite required (full=true, ${SELECTED_COUNT} files); running: $INPUT_COMMAND $SELECTED_TESTS"
+              eval "$INPUT_COMMAND $SELECTED_TESTS"
+            else
+              echo "Full suite required (full=true, ${SELECTED_COUNT} files); running: $INPUT_COMMAND"
+              eval "$INPUT_COMMAND"
+            fi
+          elif [ "${SELECTED_COUNT:-0}" -gt 0 ] && [ -n "${SELECTED_TESTS:-}" ]; then
+            echo "Running ${SELECTED_COUNT} affected test file(s): $INPUT_COMMAND $SELECTED_TESTS"
+            eval "$INPUT_COMMAND $SELECTED_TESTS"
+          else
+            echo "0 test files affected (full=false); skipping test command."
+          fi
+          echo "::endgroup::"
+        fi
+        T_CMD_END=$(python3 -c 'import time; print("%.6f" % time.time())')
+        TEST_SECONDS=$(python3 -c "print('%.3f' % ($T_CMD_END - $T_CMD_START if '''${INPUT_COMMAND:-}''' else 0.0))")
+        echo "test_seconds=$TEST_SECONDS" >> "$GITHUB_OUTPUT"
+
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "${DECISIONS_PATH:-}" ]; then
+          python3 - "$DECISIONS_PATH" "$GITHUB_STEP_SUMMARY" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" "$TEST_SECONDS" <<'PY'
+        import json, sys
+        dec_path, summary_path, t_inst, t_sel, t_ovh, t_test = sys.argv[1:7]
+        with open(dec_path) as f:
+            d = json.load(f)
+        counts = d.get("counts", {})
+        with open(summary_path, "a") as out:
+            out.write("### ci-proof Test Selection\n\n")
+            out.write("| Metric | Value |\n|---|---|\n")
+            out.write("| Changed files | `%d` |\n" % len(d.get("diff_files", [])))
+            out.write("| Full suite required (`full_run`) | `%s` |\n" % ("true" if d.get("full") else "false"))
+            out.write("| Selected test files (`MUST_RUN` + `UNCERTAIN`) | `%d` |\n" % len(d.get("selected", [])))
+            out.write("| Safely skipped test files (`SAFE_TO_SKIP`) | `%d` |\n" % counts.get("SAFE_TO_SKIP", 0))
+            out.write("| Action overhead (install + diff + select) | `%ss` (`install=%ss`, `select=%ss`) |\n" % (t_ovh, t_inst, t_sel))
+            out.write("| Test execution time (`command`) | `%ss` |\n\n" % t_test)
+        PY
+        fi

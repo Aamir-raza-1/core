@@ -1,0 +1,83 @@
+# Profile: pydantic/pydantic, written from the repo at upstream 0edb9347 (2026-10-11) and the B-pydantic traced run.
+# Monorepo since 2025: pydantic (pure Python) + pydantic-core (Rust extension + a thin Python package).
+repo: pydantic/pydantic
+language: python
+language_confidence: read
+test_runner: pytest
+# `make test` in the CI "test" job (one per OS x Python); the core jobs run `uv run pytest tests/pydantic_core` + `cargo test`
+test_command: "uv run coverage run -m pytest --durations=10 --parallel-threads 1"
+test_command_confidence: read
+setup:
+  os_packages: []
+  toolchain: "uv (setup-uv) + Python 3.10..3.15/3.15t/pypy3.11 matrix; Rust stable (pydantic-core is built from source by uv sync)"
+  install: "uv sync --all-packages --group testing-extra --all-extras"
+  pre_test: ""
+  services: []
+setup_confidence: read
+source_roots: [pydantic, pydantic-core/python]
+# tests/pydantic_core is a symlink to pydantic-core/tests: the engine keys test files by their real path (what PRs change)
+test_roots: [tests, pydantic-core/tests]
+# pydantic_core is imported as `pydantic_core` (maturin python-source = python); core tests import `..conftest` / `tests.*` inside pydantic-core
+import_roots: [pydantic-core/python, pydantic-core]
+run_everything_when:
+  # one environment for every test: any dependency or build change can affect all of them
+  - pyproject.toml
+  - uv.lock
+  - Makefile
+  - pydantic-core/pyproject.toml
+  - pydantic-core/uv.lock
+  - pydantic-core/Cargo.toml
+  - pydantic-core/Cargo.lock
+  - pydantic-core/build.rs
+  - "pydantic-core/.cargo/**"
+  - "pydantic-core/rust-toolchain*"
+  # Rust sources compile into the extension every test calls; coverage.py cannot see Rust lines (tool-only gap: Rust per-test coverage)
+  - "pydantic-core/src/**"
+run_everything_when_confidence: read
+tooling_scopes:
+  # files outside source/test roots that tests read: pytest-examples reads them while COLLECTING test_docs.py /
+  # test_docstrings.py. Measured: the traced run's collection windows attribute all 91 docs/**/*.md and
+  # pydantic-core/README.md to exactly these test files (the engine only consults the runtime map for source files).
+  "docs/**": "tests/test_docs.py"
+  "pydantic-core/README.md": "pydantic-core/tests/test_docstrings.py"
+  # pyright/mypy/pyrefly checks over these files run in their own CI job (no pytest test files)
+  "tests/typechecking/**": "tests/typechecking/"
+tooling_scopes_confidence: read
+# test_exports.py imports every pydantic module found by a directory glob; per-test coverage credits a module's
+# import side effects to whichever test imports it FIRST, so its map entry is order-dependent. Safety run v1 found
+# it as the only file-level miss (4 of 69 bugs, each bug still caught by other selected files). Cost: 2.6% of suite seconds.
+always_run:
+  - tests/test_exports.py
+always_run_confidence: read
+# No always_run for test_docs: docstring examples under pydantic/ are read at collection, and the tracer records collection
+# windows per test file (coverage context "<file>|collect" + eBPF), so the runtime map already maps every
+# pydantic/**/*.py (105/105) to tests/test_docs.py. Dropping always_run saved ~29% of suite seconds per PR.
+ignore:
+  - ".github/**"
+  - HISTORY.md
+  - README.md
+  - CONTRIBUTING.md
+  - CITATION.cff
+  - LICENSE
+  - mkdocs.yml
+  - build-docs.sh
+  - update_v1.sh
+  - "release/**"
+  - .pre-commit-config.yaml
+  - .gitignore
+  - "pydantic-core/benches/**"
+  - "pydantic-core/wasm-preview/**"
+  - "pydantic-core/.github/**"
+ci:
+  provider: github_actions
+  workflow: .github/workflows/ci.yml
+  full_run_marker: "every PR run: the 'Test <os> / <python>' matrix (26 jobs) always runs; no path filter"
+  test_jobs_regex: "^(Test |core / Test|Mypy typechecking tests|Typechecking integration tests|Test Pydantic plugin|Test memray|Test typing-extensions)"
+existing_selection: "none: ci.yml runs on every PR with no path filter or affected-test logic; the full test matrix (3 OS x 8 Pythons + 2 macOS-intel, memray, plugin, mypy, typechecking, typing-extensions x6, core tests x3 OS + debug) runs every time. Only release builds are gated (label 'full build')."
+existing_selection_confidence: read
+trace:
+  coverage_core: ctrace
+  runner_root: /home/runner/work/pydantic/pydantic/
+  process_names: [python]
+  fork: Aamir-raza-1/pydantic (branch trace/phase1, ci_trace/ + .github/workflows/trace-tests.yml)
+notes: "B-pydantic (2026-10-11): see experiments/pydantic/ and knowledge/repos/pydantic__pydantic.md for measured numbers."

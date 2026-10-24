@@ -1,0 +1,260 @@
+name: Install Matrix Verification (DV2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_macos:
+        description: 'Run all Python versions (3.9, 3.11, 3.13) on macOS runners'
+        required: false
+        default: 'false'
+  push:
+    branches:
+      - 'dv2/install-matrix'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  install-matrix:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64: Ubuntu 22.04 & 24.04 across Python 3.9, 3.11, 3.13
+          - os: ubuntu-22.04
+            python: '3.9'
+            platform_family: linux
+            run_docker: false
+          - os: ubuntu-22.04
+            python: '3.11'
+            platform_family: linux
+            run_docker: true
+          - os: ubuntu-22.04
+            python: '3.13'
+            platform_family: linux
+            run_docker: false
+          - os: ubuntu-24.04
+            python: '3.9'
+            platform_family: linux
+            run_docker: false
+          - os: ubuntu-24.04
+            python: '3.11'
+            platform_family: linux
+            run_docker: true
+          - os: ubuntu-24.04
+            python: '3.13'
+            platform_family: linux
+            run_docker: false
+          # Linux ARM64: Ubuntu 24.04 ARM across Python 3.9, 3.11, 3.13
+          - os: ubuntu-24.04-arm
+            python: '3.9'
+            platform_family: linux
+            run_docker: false
+          - os: ubuntu-24.04-arm
+            python: '3.11'
+            platform_family: linux
+            run_docker: true
+          - os: ubuntu-24.04-arm
+            python: '3.13'
+            platform_family: linux
+            run_docker: false
+          # macOS (cost policy: 1 Python version per macOS OS by default; full matrix on release tags)
+          - os: macos-13
+            python: '3.11'
+            platform_family: macos
+            run_docker: false
+          - os: macos-14
+            python: '3.11'
+            platform_family: macos
+            run_docker: false
+          - os: macos-15
+            python: '3.11'
+            platform_family: macos
+            run_docker: false
+          # Windows (native pip/pipx/Action + WSL2 check for install.sh)
+          - os: windows-latest
+            python: '3.11'
+            platform_family: windows
+            run_docker: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Prepare smoke-test fixture and PyYAML for composite action
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform_family }}" = "windows" ]; then
+            PY_DIR="$(dirname "$(command -v python)")"
+            if [ ! -f "$PY_DIR/python3.exe" ]; then
+              cp "$PY_DIR/python.exe" "$PY_DIR/python3.exe"
+            fi
+          fi
+          python -m pip install --upgrade pip setuptools wheel pyyaml
+          mkdir -p "$RUNNER_TEMP/dv2-fixture"
+          cat > "$RUNNER_TEMP/dv2-fixture/static.json" <<'EOF'
+          {"tests/components/hue/test_light.py": ["homeassistant/components/hue/light.py"], "tests/components/zwave/test_init.py": ["homeassistant/components/zwave/init.py"]}
+          EOF
+
+      - name: Verify Method 1 — scripts/install.sh + scripts/uninstall.sh
+        id: method_install_sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform_family }}" = "windows" ]; then
+            echo "Verifying Windows native bash reports WSL2 requirement for install.sh..."
+            if bash scripts/install.sh > "$RUNNER_TEMP/install_win.log" 2>&1; then
+              echo "Unexpected success on native Windows without WSL2"
+              exit 1
+            fi
+            grep -i "WSL2" "$RUNNER_TEMP/install_win.log"
+            echo "status=wsl_only_verified" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TMP_HOME="$(mktemp -d)"
+          HOME="$TMP_HOME" bash scripts/install.sh
+          VER="$("$TMP_HOME/.local/bin/ci-proof" --version)"
+          echo "install.sh version: $VER"
+          [ "$VER" = "ci-proof 0.1.0" ]
+
+          "$TMP_HOME/.local/bin/ci-proof" index \
+            --profile profiles/home-assistant__core.yaml \
+            --static "$RUNNER_TEMP/dv2-fixture/static.json" \
+            --out "$RUNNER_TEMP/dv2-fixture/install_sh.idx"
+
+          OUT="$("$TMP_HOME/.local/bin/ci-proof" affected-tests \
+            --profile profiles/home-assistant__core.yaml \
+            --index "$RUNNER_TEMP/dv2-fixture/install_sh.idx" \
+            --changed homeassistant/components/hue/light.py)"
+          echo "install.sh affected-tests: $OUT"
+          [ "$OUT" = "tests/components/hue/test_light.py" ]
+
+          HOME="$TMP_HOME" bash scripts/uninstall.sh
+          REMAINING="$(find "$TMP_HOME" -mindepth 1)"
+          [ -z "$REMAINING" ]
+          rm -rf "$TMP_HOME"
+          echo "status=pass" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Method 2 — pip (virtualenv install + smoke + uninstall)
+        id: method_pip
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV_DIR="$RUNNER_TEMP/dv2-venv"
+          python -m venv "$VENV_DIR"
+          if [ "${{ matrix.platform_family }}" = "windows" ]; then
+            VENV_PY="$VENV_DIR/Scripts/python.exe"
+            VENV_BIN="$VENV_DIR/Scripts/ci-proof.exe"
+          else
+            VENV_PY="$VENV_DIR/bin/python"
+            VENV_BIN="$VENV_DIR/bin/ci-proof"
+          fi
+          "$VENV_PY" -m pip install --quiet ".[yaml]"
+          VER="$("$VENV_BIN" --version | tr -d '\r')"
+          echo "pip version: $VER"
+          [ "$VER" = "ci-proof 0.1.0" ]
+
+          "$VENV_BIN" index \
+            --profile profiles/home-assistant__core.yaml \
+            --static "$RUNNER_TEMP/dv2-fixture/static.json" \
+            --out "$RUNNER_TEMP/dv2-fixture/pip.idx"
+
+          OUT="$("$VENV_BIN" affected-tests \
+            --profile profiles/home-assistant__core.yaml \
+            --index "$RUNNER_TEMP/dv2-fixture/pip.idx" \
+            --changed homeassistant/components/hue/light.py | tr -d '\r')"
+          echo "pip affected-tests: $OUT"
+          [ "$OUT" = "tests/components/hue/test_light.py" ]
+
+          "$VENV_PY" -m pip uninstall -y ci-proof
+          ! "$VENV_BIN" --version >/dev/null 2>&1
+          rm -rf "$VENV_DIR"
+          echo "status=pass" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Method 3 — pipx (isolated CLI install + smoke + uninstall)
+        id: method_pipx
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PIPX_HOME="$RUNNER_TEMP/dv2-pipx-home"
+          export PIPX_BIN_DIR="$RUNNER_TEMP/dv2-pipx-bin"
+          mkdir -p "$PIPX_HOME" "$PIPX_BIN_DIR"
+          if ! command -v pipx >/dev/null 2>&1; then
+            python -m pip install --quiet pipx
+          fi
+          python -m pipx install ".[yaml]"
+          if [ "${{ matrix.platform_family }}" = "windows" ]; then
+            PIPX_BIN="$PIPX_BIN_DIR/ci-proof.exe"
+          else
+            PIPX_BIN="$PIPX_BIN_DIR/ci-proof"
+          fi
+          VER="$("$PIPX_BIN" --version | tr -d '\r')"
+          echo "pipx version: $VER"
+          [ "$VER" = "ci-proof 0.1.0" ]
+
+          OUT="$("$PIPX_BIN" affected-tests \
+            --profile profiles/home-assistant__core.yaml \
+            --static "$RUNNER_TEMP/dv2-fixture/static.json" \
+            --changed homeassistant/components/hue/light.py | tr -d '\r')"
+          echo "pipx affected-tests: $OUT"
+          [ "$OUT" = "tests/components/hue/test_light.py" ]
+
+          python -m pipx uninstall ci-proof
+          ! [ -e "$PIPX_BIN" ]
+          rm -rf "$PIPX_HOME" "$PIPX_BIN_DIR"
+          echo "status=pass" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Method 4 — GitHub Action (composite action ./ smoke test)
+        id: method_action
+        uses: ./
+        with:
+          profile: profiles/home-assistant__core.yaml
+          static: ${{ runner.temp }}/dv2-fixture/static.json
+          changed_files: homeassistant/components/hue/light.py
+
+      - name: Assert GitHub Action outputs
+        id: assert_action
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Action selected: ${{ steps.method_action.outputs.selected }}"
+          echo "Action full: ${{ steps.method_action.outputs.full }}"
+          echo "Action overhead_seconds: ${{ steps.method_action.outputs.overhead_seconds }}"
+          [ "${{ steps.method_action.outputs.selected }}" = "tests/components/hue/test_light.py" ]
+          [ "${{ steps.method_action.outputs.full }}" = "false" ]
+          echo "status=pass" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Method 5 — Docker local build & container run (Linux)
+        id: method_docker
+        if: matrix.run_docker == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t ci-proof:matrix .
+          VER="$(docker run --rm ci-proof:matrix --version | tr -d '\r')"
+          echo "docker version: $VER"
+          [ "$VER" = "ci-proof 0.1.0" ]
+
+          cp "$RUNNER_TEMP/dv2-fixture/static.json" ./dv2_static_tmp.json
+          OUT="$(docker run --rm -v "$PWD:/workspace" ci-proof:matrix affected-tests \
+            --profile profiles/home-assistant__core.yaml \
+            --static dv2_static_tmp.json \
+            --changed homeassistant/components/hue/light.py | tr -d '\r')"
+          rm -f ./dv2_static_tmp.json
+          echo "docker affected-tests: $OUT"
+          [ "$OUT" = "tests/components/hue/test_light.py" ]
+
+          docker rmi ci-proof:matrix
+          echo "status=pass" >> "$GITHUB_OUTPUT"
