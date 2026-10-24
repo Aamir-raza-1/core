@@ -1,39 +1,22 @@
-name: Isolate mutants (resolve ambiguous failures)
-
-# Applies ONE mutant at a time (0 = none) and runs the given tests N times,
-# to resolve which planted bug made a test fail, and whether the test is flaky.
+name: Revalidate 5x scenarios (DV8)
 
 on:
+  push:
+    branches:
+      - reval/5x
   workflow_dispatch:
-    inputs:
-      mutation_run_id:
-        description: Run ID of the safety-mutation run (for its mutants.json)
-        default: "37971499115"
-      mutants:
-        description: JSON list of mutant ids, 0 = baseline
-        default: "[0, 4, 18, 20]"
-      tests:
-        description: Test paths
-        default: tests/components/esphome/test_water_heater.py tests/components/mqtt/test_water_heater.py
-      repeats:
-        default: "3"
 
 permissions:
   contents: read
-  actions: read
 
 env:
   UV_CACHE_DIR: /tmp/uv-cache
   APT_CACHE_VERSION: 1
 
 jobs:
-  run:
-    name: Mutant ${{ matrix.mutant }}
+  revalidate:
+    name: Revalidate 5 scenarios (home-assistant/core)
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        mutant: ${{ fromJson(inputs.mutants) }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/cache-apt-packages
@@ -54,28 +37,53 @@ jobs:
           python-cache-key: ${{ steps.info.outputs.cache_key }}
           uv-cache-dir: ${{ env.UV_CACHE_DIR }}
           apt-cache-version: ${{ env.APT_CACHE_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: mutation
-          path: mutation
-          run-id: ${{ inputs.mutation_run_id }}
-          github-token: ${{ github.token }}
-      - name: Apply mutant and run tests N times
-        env:
-          TESTS: ${{ inputs.tests }}
-          REPEATS: ${{ inputs.repeats }}
-          MUTANT: ${{ matrix.mutant }}
+      - name: Run 5 scenarios (clean + planted bug)
         run: |
           . venv/bin/activate
           python3 -m script.translations develop --all > /dev/null
-          if [ "$MUTANT" != "0" ]; then python -m script.trace.mutate apply-ids mutation "$MUTANT"; fi
           mkdir -p out
-          for i in $(seq 1 "$REPEATS"); do
-            python3 -b -X dev -m pytest -qq --timeout=30 -p no:sugar -p no:cacheprovider \
-              --junitxml=out/junit-m${MUTANT}-r${i}.xml -o junit_family=legacy $TESTS > out/run-${i}.txt 2>&1 || true
-            echo "repeat $i: $(tail -1 out/run-${i}.txt)"
-          done
+
+          # Scenario 1: leaf component (homeassistant/components/pvoutput/sensor.py -> 4 test files)
+          t0=$(python3 -c 'import time; print(time.time())')
+          python3 -b -X dev -m pytest -qq --timeout=30 -p no:sugar -p no:cacheprovider \
+            --junitxml=out/s1.xml -o junit_family=legacy \
+            tests/components/pvoutput/test_config_flow.py \
+            tests/components/pvoutput/test_diagnostics.py \
+            tests/components/pvoutput/test_init.py \
+            tests/components/pvoutput/test_sensor.py > out/s1.txt 2>&1
+          t1=$(python3 -c 'import time; print(time.time())')
+          echo "HA_S1 sec=$(python3 -c "print(round($t1-$t0, 2))") $(tail -1 out/s1.txt)"
+
+          # Scenario 4: test-only (tests/components/pvoutput/test_sensor.py -> 1 test file)
+          t0=$(python3 -c 'import time; print(time.time())')
+          python3 -b -X dev -m pytest -qq --timeout=30 -p no:sugar -p no:cacheprovider \
+            --junitxml=out/s4.xml -o junit_family=legacy \
+            tests/components/pvoutput/test_sensor.py > out/s4.txt 2>&1
+          t1=$(python3 -c 'import time; print(time.time())')
+          echo "HA_S4 sec=$(python3 -c "print(round($t1-$t0, 2))") $(tail -1 out/s4.txt)"
+
+          # Scenario 5: planted bug in homeassistant/components/pvoutput/sensor.py line 126 (negate-if)
+          python3 -c '
+          p = "homeassistant/components/pvoutput/sensor.py"
+          txt = open(p).read()
+          target = "if description.value_fn(coordinator.data) is not None:"
+          assert target in txt
+          open(p, "w").write(txt.replace(target, "if not (description.value_fn(coordinator.data) is not None):", 1))
+          '
+          t0=$(python3 -c 'import time; print(time.time())')
+          set +e
+          python3 -b -X dev -m pytest -qq --timeout=30 -p no:sugar -p no:cacheprovider \
+            --junitxml=out/s5_selected.xml -o junit_family=legacy \
+            tests/components/pvoutput/test_config_flow.py \
+            tests/components/pvoutput/test_diagnostics.py \
+            tests/components/pvoutput/test_init.py \
+            tests/components/pvoutput/test_sensor.py > out/s5_selected.txt 2>&1
+          rc_sel=$?
+          set -e
+          t1=$(python3 -c 'import time; print(time.time())')
+          echo "HA_S5 rc_sel=$rc_sel sec=$(python3 -c "print(round($t1-$t0, 2))") $(tail -1 out/s5_selected.txt)"
+          git checkout -- homeassistant/components/pvoutput/sensor.py
       - uses: actions/upload-artifact@v4
         with:
-          name: isolate-m${{ matrix.mutant }}
-          path: out/*.xml
+          name: reval-5x-ha
+          path: out/
