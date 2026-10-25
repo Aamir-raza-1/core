@@ -60,6 +60,7 @@ def _candidates(path: str) -> tuple[list[dict], list[dict]]:
             and not isinstance(node.value.value, bool)
             and node.lineno == node.end_lineno
             and not node.targets[0].id.startswith("__")
+            and node.targets[0].id != "PARALLEL_UPDATES"
         ):
             line = lines[node.lineno - 1]
             v = node.value
@@ -106,7 +107,7 @@ def generate(targets_file: str, seed: int, out: str) -> None:
             first = next(x for x in mutants if x["id"] == b[0])
             if first["file"].startswith("homeassistant/helpers/"):
                 continue
-            if area not in {_area(next(x for x in mutants if x["id"] == i)["file"]) for i in b} and len(b) < 8:
+            if area not in {_area(next(x for x in mutants if x["id"] == i)["file"]) for i in b} and len(b) < 12:
                 b.append(m["id"])
                 break
         else:

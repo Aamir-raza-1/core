@@ -1,0 +1,634 @@
+[
+  {
+    "pr": 185395,
+    "component": "risco",
+    "commit_sha": "075bdcaab6ca141f2b2cd049b8af46bbb2f881ad",
+    "committed_at": "2026-10-09T11:49:48Z",
+    "title": "Use typed config entry in Risco coordinator (#185395)",
+    "changed_files": [
+      "homeassistant/components/risco/coordinator.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/risco/coordinator.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/risco/coordinator.py",
+    "selected_test_files": [
+      "tests/components/risco/test_alarm_control_panel.py",
+      "tests/components/risco/test_binary_sensor.py",
+      "tests/components/risco/test_config_flow.py",
+      "tests/components/risco/test_init.py",
+      "tests/components/risco/test_sensor.py",
+      "tests/components/risco/test_services.py",
+      "tests/components/risco/test_switch.py"
+    ],
+    "selected_test_files_count": 7,
+    "selected_traced_seconds": 9.07
+  },
+  {
+    "pr": 185379,
+    "component": "lojack",
+    "commit_sha": "edd1033c2e3561b37c57fe69fefee81c6f534fd3",
+    "committed_at": "2026-10-09T11:47:06Z",
+    "title": "Use typed config entry in LoJack coordinator (#185379)",
+    "changed_files": [
+      "homeassistant/components/lojack/coordinator.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/lojack/coordinator.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/lojack/coordinator.py",
+    "selected_test_files": [
+      "tests/components/lojack/test_config_flow.py",
+      "tests/components/lojack/test_device_tracker.py",
+      "tests/components/lojack/test_init.py"
+    ],
+    "selected_test_files_count": 3,
+    "selected_traced_seconds": 1.77
+  },
+  {
+    "pr": 185402,
+    "component": "switcher_kis",
+    "commit_sha": "348e593dbefd1fa2f90aa5d0b052c8149fe35174",
+    "committed_at": "2026-10-09T11:31:55Z",
+    "title": "Use typed config entry in Switcher coordinator (#185402)",
+    "changed_files": [
+      "homeassistant/components/switcher_kis/coordinator.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/switcher_kis/coordinator.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/switcher_kis/coordinator.py",
+    "selected_test_files": [
+      "tests/components/switcher_kis/test_button.py",
+      "tests/components/switcher_kis/test_climate.py",
+      "tests/components/switcher_kis/test_config_flow.py",
+      "tests/components/switcher_kis/test_cover.py",
+      "tests/components/switcher_kis/test_diagnostics.py",
+      "tests/components/switcher_kis/test_init.py",
+      "tests/components/switcher_kis/test_light.py",
+      "tests/components/switcher_kis/test_sensor.py",
+      "tests/components/switcher_kis/test_services.py",
+      "tests/components/switcher_kis/test_switch.py"
+    ],
+    "selected_test_files_count": 10,
+    "selected_traced_seconds": 20.65
+  },
+  {
+    "pr": 185343,
+    "component": "teleinfo",
+    "commit_sha": "6d0f8f2818a6732473f822d2852b7b38e2405206",
+    "committed_at": "2026-10-09T11:02:53Z",
+    "title": "Remove redundant apparent power translation key from Teleinfo (#185343)",
+    "changed_files": [
+      "homeassistant/components/teleinfo/sensor.py",
+      "homeassistant/components/teleinfo/strings.json",
+      "tests/components/teleinfo/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/teleinfo/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/teleinfo/sensor.py",
+    "selected_test_files": [
+      "tests/components/teleinfo/test_config_flow.py",
+      "tests/components/teleinfo/test_init.py",
+      "tests/components/teleinfo/test_sensor.py"
+    ],
+    "selected_test_files_count": 3,
+    "selected_traced_seconds": 2.22
+  },
+  {
+    "pr": 185225,
+    "component": "signal_messenger",
+    "commit_sha": "5061866b8fe32431124a5f903ce5818626ecf288",
+    "committed_at": "2026-10-09T11:02:33Z",
+    "title": "Fix Signal Messenger notify failing to load when the REST API is down at startup (#185225)",
+    "changed_files": [
+      "homeassistant/components/signal_messenger/notify.py",
+      "tests/components/signal_messenger/conftest.py",
+      "tests/components/signal_messenger/test_notify.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/signal_messenger/notify.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/signal_messenger/notify.py",
+    "selected_test_files": [
+      "tests/components/signal_messenger/test_notify.py"
+    ],
+    "selected_test_files_count": 1,
+    "selected_traced_seconds": 0.98
+  },
+  {
+    "pr": 185353,
+    "component": "weatherflow_cloud",
+    "commit_sha": "8d03d8df76f1427aa0ed85385dd29855a37a6b65",
+    "committed_at": "2026-10-09T10:59:52Z",
+    "title": "Remove redundant translation names from WeatherflowCloud (#185353)",
+    "changed_files": [
+      "homeassistant/components/weatherflow_cloud/sensor.py",
+      "homeassistant/components/weatherflow_cloud/strings.json",
+      "tests/components/weatherflow_cloud/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/weatherflow_cloud/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/weatherflow_cloud/sensor.py",
+    "selected_test_files": [
+      "tests/components/weatherflow_cloud/test_config_flow.py",
+      "tests/components/weatherflow_cloud/test_coordinators.py",
+      "tests/components/weatherflow_cloud/test_init.py",
+      "tests/components/weatherflow_cloud/test_sensor.py",
+      "tests/components/weatherflow_cloud/test_weather.py"
+    ],
+    "selected_test_files_count": 5,
+    "selected_traced_seconds": 4.1
+  },
+  {
+    "pr": 185351,
+    "component": "v2c",
+    "commit_sha": "d9a6cf1363f0bb3f8ed4f79cdfb383f573d0e805",
+    "committed_at": "2026-10-09T10:59:31Z",
+    "title": "Remove redundant charging translation key from V2C (#185351)",
+    "changed_files": [
+      "homeassistant/components/v2c/binary_sensor.py",
+      "homeassistant/components/v2c/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/v2c/binary_sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/v2c/binary_sensor.py",
+    "selected_test_files": [
+      "tests/components/v2c/test_config_flow.py",
+      "tests/components/v2c/test_diagnostics.py",
+      "tests/components/v2c/test_light.py",
+      "tests/components/v2c/test_number.py",
+      "tests/components/v2c/test_select.py",
+      "tests/components/v2c/test_sensor.py"
+    ],
+    "selected_test_files_count": 6,
+    "selected_traced_seconds": 2.3
+  },
+  {
+    "pr": 185349,
+    "component": "unifi_access",
+    "commit_sha": "78fdb42e7ff79e6dd72a1d47bba627795665317f",
+    "committed_at": "2026-10-09T10:32:49Z",
+    "title": "Remove redundant doorbell translation name from UniFi Access (#185349)",
+    "changed_files": [
+      "homeassistant/components/unifi_access/event.py",
+      "homeassistant/components/unifi_access/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/unifi_access/event.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/unifi_access/event.py",
+    "selected_test_files": [
+      "tests/components/unifi_access/test_binary_sensor.py",
+      "tests/components/unifi_access/test_button.py",
+      "tests/components/unifi_access/test_config_flow.py",
+      "tests/components/unifi_access/test_diagnostics.py",
+      "tests/components/unifi_access/test_event.py",
+      "tests/components/unifi_access/test_image.py",
+      "tests/components/unifi_access/test_init.py",
+      "tests/components/unifi_access/test_select.py",
+      "tests/components/unifi_access/test_sensor.py",
+      "tests/components/unifi_access/test_services.py",
+      "tests/components/unifi_access/test_switch.py"
+    ],
+    "selected_test_files_count": 11,
+    "selected_traced_seconds": 26.25
+  },
+  {
+    "pr": 185352,
+    "component": "weatherflow",
+    "commit_sha": "dd1cdc8c484a5e87ca397ac48b53cf44397c11f6",
+    "committed_at": "2026-10-09T10:32:26Z",
+    "title": "Remove redundant wind direction translation name from WeatherFlow (#185352)",
+    "changed_files": [
+      "homeassistant/components/weatherflow/sensor.py",
+      "homeassistant/components/weatherflow/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/weatherflow/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/weatherflow/sensor.py",
+    "selected_test_files": [
+      "tests/components/weatherflow/test_config_flow.py",
+      "tests/components/weatherflow/test_sensor.py"
+    ],
+    "selected_test_files_count": 2,
+    "selected_traced_seconds": 1.9
+  },
+  {
+    "pr": 185323,
+    "component": "huum",
+    "commit_sha": "943391a46d676ec4cdf0b52b8b5f12ec9a10acbb",
+    "committed_at": "2026-10-09T10:30:40Z",
+    "title": "Remove redundant humidity translation name from Huum (#185323)",
+    "changed_files": [
+      "homeassistant/components/huum/number.py",
+      "homeassistant/components/huum/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/huum/number.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/huum/number.py",
+    "selected_test_files": [
+      "tests/components/huum/test_binary_sensor.py",
+      "tests/components/huum/test_climate.py",
+      "tests/components/huum/test_config_flow.py",
+      "tests/components/huum/test_diagnostics.py",
+      "tests/components/huum/test_init.py",
+      "tests/components/huum/test_light.py",
+      "tests/components/huum/test_number.py",
+      "tests/components/huum/test_sensor.py"
+    ],
+    "selected_test_files_count": 8,
+    "selected_traced_seconds": 3.19
+  },
+  {
+    "pr": 185273,
+    "component": "blink",
+    "commit_sha": "00b897efe0dcff778245e4478c227be8b9c797dd",
+    "committed_at": "2026-10-09T10:30:01Z",
+    "title": "Raise ConfigEntryError when migration requires reauth in blink (#185273)",
+    "changed_files": [
+      "homeassistant/components/blink/__init__.py",
+      "homeassistant/components/blink/strings.json",
+      "tests/components/blink/test_init.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/blink/__init__.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/blink/__init__.py",
+    "selected_test_files": [
+      "tests/components/blink/test_camera.py",
+      "tests/components/blink/test_config_flow.py",
+      "tests/components/blink/test_diagnostics.py",
+      "tests/components/blink/test_init.py"
+    ],
+    "selected_test_files_count": 4,
+    "selected_traced_seconds": 2.69
+  },
+  {
+    "pr": 185331,
+    "component": "motionmount",
+    "commit_sha": "0e4a0673524e9a9a74f7b00e529c3d59675433aa",
+    "committed_at": "2026-10-09T10:28:22Z",
+    "title": "Remove redundant motionmount is moving translation key from Vogel's MotionMount (#185331)",
+    "changed_files": [
+      "homeassistant/components/motionmount/binary_sensor.py",
+      "homeassistant/components/motionmount/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/motionmount/binary_sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/motionmount/binary_sensor.py",
+    "selected_test_files": [
+      "tests/components/motionmount/test_config_flow.py",
+      "tests/components/motionmount/test_entity.py",
+      "tests/components/motionmount/test_init.py",
+      "tests/components/motionmount/test_number.py",
+      "tests/components/motionmount/test_select.py",
+      "tests/components/motionmount/test_sensor.py"
+    ],
+    "selected_test_files_count": 6,
+    "selected_traced_seconds": 5.34
+  },
+  {
+    "pr": 185338,
+    "component": "solarman",
+    "commit_sha": "c0a814020a81575e004d55744b713a0f86f06e38",
+    "committed_at": "2026-10-09T10:28:02Z",
+    "title": "Remove redundant power factor translation key from Solarman (#185338)",
+    "changed_files": [
+      "homeassistant/components/solarman/sensor.py",
+      "homeassistant/components/solarman/strings.json",
+      "tests/components/solarman/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/solarman/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/solarman/sensor.py",
+    "selected_test_files": [
+      "tests/components/solarman/test_config_flow.py",
+      "tests/components/solarman/test_init.py",
+      "tests/components/solarman/test_sensor.py"
+    ],
+    "selected_test_files_count": 3,
+    "selected_traced_seconds": 1.41
+  },
+  {
+    "pr": 185342,
+    "component": "synology_dsm",
+    "commit_sha": "c13a97718bce34fd8053e196c043d5864da1bee2",
+    "committed_at": "2026-10-09T10:27:31Z",
+    "title": "Remove redundant translation keys from Synology DSM (#185342)",
+    "changed_files": [
+      "homeassistant/components/synology_dsm/sensor.py",
+      "homeassistant/components/synology_dsm/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/synology_dsm/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/synology_dsm/sensor.py",
+    "selected_test_files": [
+      "tests/components/synology_dsm/test_backup.py",
+      "tests/components/synology_dsm/test_config_flow.py",
+      "tests/components/synology_dsm/test_diagnostics.py",
+      "tests/components/synology_dsm/test_init.py",
+      "tests/components/synology_dsm/test_media_source.py",
+      "tests/components/synology_dsm/test_repairs.py",
+      "tests/components/synology_dsm/test_select.py",
+      "tests/components/synology_dsm/test_sensor.py",
+      "tests/components/synology_dsm/test_services.py"
+    ],
+    "selected_test_files_count": 9,
+    "selected_traced_seconds": 15.35
+  },
+  {
+    "pr": 185345,
+    "component": "tibber",
+    "commit_sha": "8c6001e6d582587ccb2dd4016aa59277cb0c6b41",
+    "committed_at": "2026-10-09T10:27:11Z",
+    "title": "Remove redundant translation names from Tibber (#185345)",
+    "changed_files": [
+      "homeassistant/components/tibber/sensor.py",
+      "homeassistant/components/tibber/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/tibber/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/tibber/sensor.py",
+    "selected_test_files": [
+      "tests/components/tibber/test_binary_sensor.py",
+      "tests/components/tibber/test_common.py",
+      "tests/components/tibber/test_config_flow.py",
+      "tests/components/tibber/test_coordinator.py",
+      "tests/components/tibber/test_diagnostics.py",
+      "tests/components/tibber/test_init.py",
+      "tests/components/tibber/test_notify.py",
+      "tests/components/tibber/test_sensor.py",
+      "tests/components/tibber/test_services.py",
+      "tests/components/tibber/test_statistics.py"
+    ],
+    "selected_test_files_count": 10,
+    "selected_traced_seconds": 48.54
+  },
+  {
+    "pr": 185348,
+    "component": "trafikverket_weatherstation",
+    "commit_sha": "d80cef21a2f2c359bd55ddde43b406267984b414",
+    "committed_at": "2026-10-09T10:26:53Z",
+    "title": "Remove redundant wind direction translation name from Trafikverket Weather Station (#185348)",
+    "changed_files": [
+      "homeassistant/components/trafikverket_weatherstation/sensor.py",
+      "homeassistant/components/trafikverket_weatherstation/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/trafikverket_weatherstation/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/trafikverket_weatherstation/sensor.py",
+    "selected_test_files": [
+      "tests/components/trafikverket_weatherstation/test_config_flow.py",
+      "tests/components/trafikverket_weatherstation/test_diagnostics.py"
+    ],
+    "selected_test_files_count": 2,
+    "selected_traced_seconds": 0.76
+  },
+  {
+    "pr": 185347,
+    "component": "tplink_omada",
+    "commit_sha": "cce45d645ee30ad9ccd365b3f338a5713d4202a3",
+    "committed_at": "2026-10-09T10:25:36Z",
+    "title": "Remove redundant firmware translation key from TP-Link Omada (#185347)",
+    "changed_files": [
+      "homeassistant/components/tplink_omada/strings.json",
+      "homeassistant/components/tplink_omada/update.py",
+      "tests/components/tplink_omada/snapshots/test_update.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/tplink_omada/update.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/tplink_omada/update.py",
+    "selected_test_files": [
+      "tests/components/tplink_omada/test_binary_sensor.py",
+      "tests/components/tplink_omada/test_config_flow.py",
+      "tests/components/tplink_omada/test_device_tracker.py",
+      "tests/components/tplink_omada/test_diagnostics.py",
+      "tests/components/tplink_omada/test_init.py",
+      "tests/components/tplink_omada/test_sensor.py",
+      "tests/components/tplink_omada/test_services.py",
+      "tests/components/tplink_omada/test_switch.py",
+      "tests/components/tplink_omada/test_update.py"
+    ],
+    "selected_test_files_count": 9,
+    "selected_traced_seconds": 20.11
+  },
+  {
+    "pr": 185231,
+    "component": "lg_infrared",
+    "commit_sha": "22d84b82dde110cff036bd0ea1572c20ee7fa240",
+    "committed_at": "2026-10-09T10:23:56Z",
+    "title": "Round LG Infrared target temperature instead of truncating it (#185231)",
+    "changed_files": [
+      "homeassistant/components/lg_infrared/climate.py",
+      "tests/components/lg_infrared/test_climate.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/lg_infrared/climate.py": "body-only"
+    },
+    "mutation_target_file": "homeassistant/components/lg_infrared/climate.py",
+    "selected_test_files": [
+      "tests/components/lg_infrared/test_button.py",
+      "tests/components/lg_infrared/test_climate.py",
+      "tests/components/lg_infrared/test_config_flow.py",
+      "tests/components/lg_infrared/test_event.py",
+      "tests/components/lg_infrared/test_init.py",
+      "tests/components/lg_infrared/test_media_player.py",
+      "tests/components/lg_infrared/test_select.py",
+      "tests/components/lg_infrared/test_switch.py"
+    ],
+    "selected_test_files_count": 8,
+    "selected_traced_seconds": 14.79
+  },
+  {
+    "pr": 185337,
+    "component": "nut",
+    "commit_sha": "88d776a383153337d1add312a17dbf770e8ab980",
+    "committed_at": "2026-10-09T10:20:50Z",
+    "title": "Remove redundant UPS power translation key from Network UPS Tools (NUT) (#185337)",
+    "changed_files": [
+      "homeassistant/components/nut/sensor.py",
+      "homeassistant/components/nut/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/nut/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/nut/sensor.py",
+    "selected_test_files": [
+      "tests/components/nut/test_button.py",
+      "tests/components/nut/test_config_flow.py",
+      "tests/components/nut/test_device_action.py",
+      "tests/components/nut/test_diagnostics.py",
+      "tests/components/nut/test_init.py",
+      "tests/components/nut/test_sensor.py",
+      "tests/components/nut/test_switch.py"
+    ],
+    "selected_test_files_count": 7,
+    "selected_traced_seconds": 12.44
+  },
+  {
+    "pr": 185336,
+    "component": "solaredge",
+    "commit_sha": "d2d5ba09ebe6ce227ebbe42d3928c640f79ddcc3",
+    "committed_at": "2026-10-09T10:20:44Z",
+    "title": "Remove redundant battery power translation key from SolarEdge (#185336)",
+    "changed_files": [
+      "homeassistant/components/solaredge/sensor.py",
+      "homeassistant/components/solaredge/strings.json",
+      "tests/components/solaredge/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/solaredge/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/solaredge/sensor.py",
+    "selected_test_files": [
+      "tests/components/solaredge/test_config_flow.py",
+      "tests/components/solaredge/test_coordinator.py",
+      "tests/components/solaredge/test_init.py",
+      "tests/components/solaredge/test_sensor.py"
+    ],
+    "selected_test_files_count": 4,
+    "selected_traced_seconds": 39.13
+  },
+  {
+    "pr": 185340,
+    "component": "subaru",
+    "commit_sha": "5afaf2741ba24cad0d2f8440746228ea48579355",
+    "committed_at": "2026-10-09T10:20:15Z",
+    "title": "Remove redundant is charging translation key from Subaru (#185340)",
+    "changed_files": [
+      "homeassistant/components/subaru/binary_sensor.py",
+      "homeassistant/components/subaru/strings.json",
+      "tests/components/subaru/snapshots/test_binary_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/subaru/binary_sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/subaru/binary_sensor.py",
+    "selected_test_files": [
+      "tests/components/subaru/test_binary_sensor.py",
+      "tests/components/subaru/test_button.py",
+      "tests/components/subaru/test_config_flow.py",
+      "tests/components/subaru/test_device_tracker.py",
+      "tests/components/subaru/test_diagnostics.py",
+      "tests/components/subaru/test_init.py",
+      "tests/components/subaru/test_lock.py",
+      "tests/components/subaru/test_sensor.py"
+    ],
+    "selected_test_files_count": 8,
+    "selected_traced_seconds": 27.46
+  },
+  {
+    "pr": 185339,
+    "component": "rfxtrx",
+    "commit_sha": "6b25a448f35417b3978595b27084e1eba6a28dd3",
+    "committed_at": "2026-10-09T10:20:11Z",
+    "title": "Remove redundant wind direction translation key from RFXCOM RFXtrx (#185339)",
+    "changed_files": [
+      "homeassistant/components/rfxtrx/sensor.py",
+      "homeassistant/components/rfxtrx/strings.json"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/rfxtrx/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/rfxtrx/sensor.py",
+    "selected_test_files": [
+      "tests/components/rfxtrx/test_binary_sensor.py",
+      "tests/components/rfxtrx/test_config_flow.py",
+      "tests/components/rfxtrx/test_cover.py",
+      "tests/components/rfxtrx/test_device_action.py",
+      "tests/components/rfxtrx/test_device_trigger.py",
+      "tests/components/rfxtrx/test_event.py",
+      "tests/components/rfxtrx/test_init.py",
+      "tests/components/rfxtrx/test_light.py",
+      "tests/components/rfxtrx/test_sensor.py",
+      "tests/components/rfxtrx/test_siren.py",
+      "tests/components/rfxtrx/test_switch.py"
+    ],
+    "selected_test_files_count": 11,
+    "selected_traced_seconds": 23.28
+  },
+  {
+    "pr": 185341,
+    "component": "sunsynk",
+    "commit_sha": "8cea4f5230317a488275e4a60a081e71d90651a8",
+    "committed_at": "2026-10-09T10:19:55Z",
+    "title": "Remove redundant translation names from Sunsynk (#185341)",
+    "changed_files": [
+      "homeassistant/components/sunsynk/sensor.py",
+      "homeassistant/components/sunsynk/strings.json",
+      "tests/components/sunsynk/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/sunsynk/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/sunsynk/sensor.py",
+    "selected_test_files": [
+      "tests/components/sunsynk/test_config_flow.py",
+      "tests/components/sunsynk/test_init.py",
+      "tests/components/sunsynk/test_sensor.py"
+    ],
+    "selected_test_files_count": 3,
+    "selected_traced_seconds": 2.46
+  },
+  {
+    "pr": 185280,
+    "component": "edifier_infrared",
+    "commit_sha": "91abed2c17844cab52749b5f5abce64d755ea131",
+    "committed_at": "2026-10-09T10:17:27Z",
+    "title": "Remove redundant downgrade check in edifier_infrared migration (#185280)",
+    "changed_files": [
+      "homeassistant/components/edifier_infrared/__init__.py"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/edifier_infrared/__init__.py": "body-only"
+    },
+    "mutation_target_file": "homeassistant/components/edifier_infrared/__init__.py",
+    "selected_test_files": [
+      "tests/components/edifier_infrared/test_button.py",
+      "tests/components/edifier_infrared/test_config_flow.py",
+      "tests/components/edifier_infrared/test_init.py",
+      "tests/components/edifier_infrared/test_media_player.py"
+    ],
+    "selected_test_files_count": 4,
+    "selected_traced_seconds": 3.88
+  },
+  {
+    "pr": 185335,
+    "component": "proxmoxve",
+    "commit_sha": "2f40e81432a76825590afd7e0bb925f0be5053f9",
+    "committed_at": "2026-10-09T10:16:30Z",
+    "title": "Remove redundant translation keys from Proxmox VE (#185335)",
+    "changed_files": [
+      "homeassistant/components/proxmoxve/sensor.py",
+      "homeassistant/components/proxmoxve/strings.json",
+      "tests/components/proxmoxve/snapshots/test_sensor.ambr"
+    ],
+    "changed_py_kinds": {
+      "homeassistant/components/proxmoxve/sensor.py": "module-level"
+    },
+    "mutation_target_file": "homeassistant/components/proxmoxve/sensor.py",
+    "selected_test_files": [
+      "tests/components/proxmoxve/test_binary_sensor.py",
+      "tests/components/proxmoxve/test_button.py",
+      "tests/components/proxmoxve/test_config_flow.py",
+      "tests/components/proxmoxve/test_diagnostics.py",
+      "tests/components/proxmoxve/test_init.py",
+      "tests/components/proxmoxve/test_sensor.py",
+      "tests/components/proxmoxve/test_update.py"
+    ],
+    "selected_test_files_count": 7,
+    "selected_traced_seconds": 36.06
+  }
+]
