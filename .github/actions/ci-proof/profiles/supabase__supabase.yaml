@@ -1,0 +1,69 @@
+# Profile: supabase/supabase (TypeScript pnpm/Turborepo monorepo).
+repo: supabase/supabase
+language: typescript
+language_confidence: read
+test_runner: vitest
+test_runner_confidence: read
+test_command: "pnpm run test:ci"
+test_command_confidence: read
+setup:
+  os_packages: []
+  toolchain: "Node.js (.nvmrc), pnpm, Blacksmith 4-vCPU runners (blacksmith-4vcpu-ubuntu-2404)"
+  install: "pnpm install --frozen-lockfile"
+  services: []
+setup_confidence: read
+source_roots:
+  - apps/studio
+  - packages/ui
+  - packages/ui-patterns
+  - packages/common
+test_roots:
+  - apps/studio
+  - packages/ui
+  - packages/ui-patterns
+import_roots:
+  - "apps/*"
+  - "packages/*"
+area_rules:
+  - "apps/studio/** -> apps/studio/"
+  - "packages/ui/** -> packages/ui/"
+  - "packages/ui-patterns/** -> packages/ui-patterns/"
+area_rules_confidence: read
+run_everything_when:
+  - "pnpm-lock.yaml"
+  - "pnpm-workspace.yaml"
+  - "turbo.json"
+  - ".github/workflows/studio-unit-tests.yml"
+run_everything_when_confidence: read
+dependency_manifests:
+  - "package.json"
+  - "apps/*/package.json"
+  - "packages/*/package.json"
+dependency_lockfiles:
+  - "pnpm-lock.yaml"
+tooling_scopes:
+  "apps/studio/*": apps/studio/
+  "packages/ui/*": packages/ui/
+  "packages/ui-patterns/*": packages/ui-patterns/
+tooling_scopes_confidence: guess
+ignore:
+  - "**/*.md"
+  - "LICENSE"
+  - ".gitignore"
+  - ".github/ISSUE_TEMPLATE/**"
+  - ".github/pull_request_template.md"
+  - ".github/CODEOWNERS"
+  - ".devcontainer/**"
+  - ".vscode/**"
+ignore_confidence: guess
+ci:
+  provider: github_actions
+  workflow: .github/workflows/studio-unit-tests.yml
+  test_jobs: "test (1)"
+existing_selection: >-
+  dorny/paths-filter on apps/studio/**, packages/ui/**, packages/ui-patterns/**, packages/common/sentry.ts,
+  and pnpm-lock.yaml. If any file in apps/studio/** matches, the entire Vitest suite runs in apps/studio.
+existing_selection_confidence: read
+trace:
+  coverage_core: v8
+  process_names: [node, vitest]

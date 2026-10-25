@@ -1,0 +1,107 @@
+# Profile: openedx/openedx-platform (formerly openedx/edx-platform; the old name 301-redirects), written from the
+# repo at upstream 2e46ebd (2026-10-09) and its unit-tests.yml. Django monolith: LMS + Studio (CMS) + shared apps.
+repo: openedx/openedx-platform
+language: python
+language_confidence: read
+test_runner: pytest
+# unit-tests.yml, one job per shard: paths + settings from .github/workflows/unit-test-shards.json
+test_command: "uv run python -Wd -m pytest -p no:randomly --ds=<shard settings> <shard paths> --cov=. --cov-report=''"
+test_command_confidence: read
+setup:
+  os_packages: [libmysqlclient-dev, libxmlsec1-dev, lynx]
+  toolchain: "uv (setup-uv) + Python 3.12"
+  install: "make test-requirements  # uv sync --no-default-groups --group testing --frozen"
+  pre_test: "settings_path / unit_test_paths from scripts/unit_test_shards_parser.py --shard-name=<shard>"
+  services: ["mongodb 7.0 (supercharge/mongodb-github-action)"]
+setup_confidence: read
+# Tests are co-located with the code (app/tests/, test_*.py next to modules). pytest python_files also collects
+# tests.py, tests_*.py and *_tests.py: the static map (fork ci_trace/static_map.py --test-pattern) keys those files,
+# and the engine treats any key of the static map as a test file. Source modules route through the source_roots
+# rules (static importers + runtime users), so source_roots holds the five first-party trees.
+source_roots: [lms, cms, common, openedx, xmodule]
+# Dedicated test-only trees (helpers, fixtures, data read from disk): edits there select their folder's tests,
+# runtime readers (eBPF opens) and otherwise the area's tests.
+test_roots: [common/test, test_root]
+# Django apps are the natural areas: a non-code file (template, fixture, json) inside an app selects the app's tests.
+area_rules:
+  # static assets: no tests live there, so only the tests that opened the file in the traced run (eBPF) select
+  - "lms/static/{name}/** -> lms/static/"
+  - "cms/static/{name}/** -> cms/static/"
+  - "common/static/{name}/** -> common/static/"
+  - "xmodule/static/{name}/** -> xmodule/static/"
+  - "xmodule/js/{name}/** -> xmodule/js/"
+  - "lms/djangoapps/{name}/** -> lms/djangoapps/{name}/"
+  - "cms/djangoapps/{name}/** -> cms/djangoapps/{name}/"
+  - "common/djangoapps/{name}/** -> common/djangoapps/{name}/"
+  - "openedx/core/djangoapps/{name}/** -> openedx/core/djangoapps/{name}/"
+  - "openedx/features/{name}/** -> openedx/features/{name}/"
+  - "openedx/core/{name}/** -> openedx/core/{name}/"
+  - "xmodule/{name}/** -> xmodule/"
+  - "lms/{name}/** -> lms/"
+  - "cms/{name}/** -> cms/"
+run_everything_when:
+  # one environment for every shard: dependencies, test config and the CI shard list
+  - pyproject.toml
+  - uv.lock
+  - "requirements/**"
+  - Makefile
+  - tox.ini
+  - setup.cfg
+  - conftest.py
+  - "common/test/conftest.py"
+  - "common/test/pytest.ini"
+  - .github/workflows/unit-tests.yml
+  - .github/workflows/unit-test-shards.json
+  - "scripts/unit_test_shards_parser.py"
+  # Django settings are loaded by name (--ds), never imported by a test file: no import edge points at them
+  - "lms/envs/**"
+  - "cms/envs/**"
+  - "openedx/envs/**"
+  # Django URL roots and settings-referenced modules load by dotted string (ROOT_URLCONF, INSTALLED_APPS)
+  - lms/urls.py
+  - cms/urls.py
+run_everything_when_confidence: read
+# Whole-service introspection tests: they GET /api-docs/schema/ (OpenAPI generation over every registered endpoint), so
+# every view/serializer/urls module is their input, but per-test coverage credits a module's import-time code to whichever
+# test imported it first. Found by the passive shadow (3 real failures of lms/tests.py on a learner_home urls/view change,
+# 2026-10-07); cost 0.06% of suite seconds. In-sample fix: needs an out-of-sample shadow window before it counts.
+always_run:
+  - lms/tests.py
+  - cms/tests.py
+always_run_confidence: read
+ignore:
+  - ".github/**"
+  - "docs/**"
+  - "*.rst"
+  - "**/*.rst"
+  - "**/*.md"
+  - LICENSE
+  - catalog-info.yaml
+  - codecov.yml
+  - .gitignore
+  - .pre-commit-config.yaml
+  - pylintrc
+  - pylintrc_tweaks
+  - mypy.ini
+  - "**/*.scss"
+  - "**/*.less"
+  # Jest/webpack config at the root: the JS workflow's inputs, never read by the pytest shards
+  - package.json
+  - package-lock.json
+  - jest.config.js
+  - setupTests.js
+  - "webpack*.js"
+  - "webpack-config/**"
+ci:
+  provider: github_actions
+  workflow: .github/workflows/unit-tests.yml
+  full_run_marker: "every PR run: the 10 run-tests shards (lms-1..5, shared-with-lms-1..2, shared-with-cms-1, cms-1..2) always run; no path filter"
+  test_jobs_regex: "^(lms|cms|shared-with-(lms|cms))-[0-9]"
+existing_selection: "none: unit-tests.yml runs on every pull_request with no path filter; all 10 shards run the whole Python suite (shards split by app folder, not by change)."
+existing_selection_confidence: read
+trace:
+  coverage_core: ctrace
+  runner_root: /home/runner/work/openedx-platform/openedx-platform/
+  process_names: [python]
+  fork: Aamir-raza-1/openedx-platform (branch trace/phase1, ci_trace/ + .github/workflows/trace-tests.yml)
+notes: "B-edx (2026-10-11): experiments/openedx/ README has the measured numbers."

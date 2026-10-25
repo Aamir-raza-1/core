@@ -108,17 +108,33 @@ runs:
         set -euo pipefail
         echo "::group::ci-proof: install & select affected tests"
 
-        T_START=$(python3 -c 'import time; print("%.6f" % time.time())')
-        WORK_TMP="${RUNNER_TEMP:-/tmp}/ci-proof-$$"
-        mkdir -p "$WORK_TMP"
+        PY_BIN=""
+        for cand in python3 python /usr/bin/python3; do
+          if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys; assert sys.version_info >= (3, 9)" >/dev/null 2>&1; then
+            PY_BIN="$cand"
+            break
+          fi
+        done
+        if [ -z "$PY_BIN" ]; then
+          echo "::error::ci-proof requires Python >= 3.9 on PATH (tried python3, python, /usr/bin/python3)"
+          exit 1
+        fi
+
+        py_eval() {
+          "$PY_BIN" -c "$1" "${@:2}" | tr -d '\r'
+        }
+
+        T_START=$(py_eval 'import time; print("%.6f" % time.time())')
+        WORK_TMP=$(py_eval 'import os, tempfile; base = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(); d = tempfile.mkdtemp(prefix="ci-proof-", dir=base if os.path.isdir(base) else None); print(d.replace("\\", "/"))')
+        ACTION_PATH_NORM=$(py_eval 'import os, sys; print(os.path.abspath(sys.argv[1]).replace("\\", "/"))' "$ACTION_PATH")
 
         # 1. Stage package files from github.action_path (avoids copying large repo checkouts during pip build)
         STAGE_SRC="$WORK_TMP/src"
         TARGET_DIR="$WORK_TMP/pkg"
         mkdir -p "$STAGE_SRC" "$TARGET_DIR"
         for item in pyproject.toml setup.py README.md engine profiles; do
-          if [ -e "$ACTION_PATH/$item" ]; then
-            cp -R "$ACTION_PATH/$item" "$STAGE_SRC/"
+          if [ -e "$ACTION_PATH_NORM/$item" ]; then
+            cp -R "$ACTION_PATH_NORM/$item" "$STAGE_SRC/"
           fi
         done
         if [ ! -d "$STAGE_SRC/profiles" ]; then
@@ -129,47 +145,60 @@ runs:
         fi
 
         INSTALLED_VIA_PIP=0
-        if python3 -c "import pip, setuptools" >/dev/null 2>&1; then
-          python3 -m pip install --quiet --no-deps --no-build-isolation --target "$TARGET_DIR" "$STAGE_SRC" && INSTALLED_VIA_PIP=1 || true
+        if "$PY_BIN" -c "import pip, setuptools" >/dev/null 2>&1; then
+          "$PY_BIN" -m pip install --quiet --no-deps --no-build-isolation --target "$TARGET_DIR" "$STAGE_SRC" && INSTALLED_VIA_PIP=1 || true
         fi
         if [ "$INSTALLED_VIA_PIP" -eq 0 ] && [ -x /usr/bin/python3 ] && /usr/bin/python3 -c "import pip, setuptools" >/dev/null 2>&1; then
           /usr/bin/python3 -m pip install --quiet --no-deps --no-build-isolation --target "$TARGET_DIR" "$STAGE_SRC" && INSTALLED_VIA_PIP=1 || true
         fi
-        if [ "$INSTALLED_VIA_PIP" -eq 0 ] && python3 -c "import pip" >/dev/null 2>&1; then
-          python3 -m pip install --quiet --no-deps --target "$TARGET_DIR" "$STAGE_SRC" >/dev/null 2>&1 && INSTALLED_VIA_PIP=1 || true
+        if [ "$INSTALLED_VIA_PIP" -eq 0 ] && "$PY_BIN" -c "import pip" >/dev/null 2>&1; then
+          "$PY_BIN" -m pip install --quiet --no-deps --target "$TARGET_DIR" "$STAGE_SRC" >/dev/null 2>&1 && INSTALLED_VIA_PIP=1 || true
         fi
         if [ "$INSTALLED_VIA_PIP" -eq 0 ]; then
           cp -R "$STAGE_SRC/engine" "$STAGE_SRC/profiles" "$TARGET_DIR/"
         fi
 
         mkdir -p "$TARGET_DIR/bin"
-        cat > "$TARGET_DIR/bin/ci-proof" <<'EOF'
-        #!/usr/bin/env python3
+        if [ ! -f "$TARGET_DIR/bin/ci-proof.exe" ] && [ ! -f "$TARGET_DIR/Scripts/ci-proof.exe" ] && [ ! -f "$TARGET_DIR/bin/ci-proof" ]; then
+          cat > "$TARGET_DIR/bin/ci-proof" <<EOF
+        #!$(command -v "$PY_BIN")
         import sys
         from engine.cli import main
         sys.exit(main())
         EOF
-        chmod +x "$TARGET_DIR/bin/ci-proof"
-
-        export PATH="$TARGET_DIR/bin:$PATH"
-        export PYTHONPATH="$TARGET_DIR${PYTHONPATH:+:$PYTHONPATH}"
-        if [ -n "${GITHUB_PATH:-}" ]; then
-          echo "$TARGET_DIR/bin" >> "$GITHUB_PATH"
+          chmod +x "$TARGET_DIR/bin/ci-proof"
+        elif [ -f "$TARGET_DIR/bin/ci-proof" ] && [ ! -f "$TARGET_DIR/bin/ci-proof.exe" ]; then
+          chmod +x "$TARGET_DIR/bin/ci-proof" || true
         fi
+
+        for dir_cand in "$TARGET_DIR/bin" "$TARGET_DIR/Scripts"; do
+          if [ -d "$dir_cand" ]; then
+            if command -v cygpath >/dev/null 2>&1; then
+              export PATH="$(cygpath -u "$dir_cand"):$PATH"
+            else
+              export PATH="$dir_cand:$PATH"
+            fi
+            if [ -n "${GITHUB_PATH:-}" ]; then
+              py_eval 'import os, sys; print(os.path.normpath(sys.argv[1]))' "$dir_cand" >> "$GITHUB_PATH"
+            fi
+          fi
+        done
+        PYTHONPATH=$(py_eval 'import os, sys; p = os.path.normpath(sys.argv[1]); cur = os.environ.get("PYTHONPATH", ""); print(p if not cur else p + os.pathsep + cur)' "$TARGET_DIR")
+        export PYTHONPATH
         if [ -n "${GITHUB_ENV:-}" ]; then
           echo "PYTHONPATH=$PYTHONPATH" >> "$GITHUB_ENV"
         fi
 
-        T_INSTALLED=$(python3 -c 'import time; print("%.6f" % time.time())')
-        INSTALL_SECONDS=$(python3 -c "print('%.3f' % ($T_INSTALLED - $T_START))")
-        echo "Installed $(ci-proof --version) in ${INSTALL_SECONDS}s"
+        T_INSTALLED=$(py_eval 'import time; print("%.6f" % time.time())')
+        INSTALL_SECONDS=$(py_eval "print('%.3f' % ($T_INSTALLED - $T_START))")
+        echo "Installed $(ci-proof --version | tr -d '\r') in ${INSTALL_SECONDS}s (python=$PY_BIN)"
 
         # 2. Compute changed files from inputs.changed_files, PR base_ref, push before SHA, or GitHub API fallback
         CHANGED_LIST_FILE="$WORK_TMP/changed.txt"
         : > "$CHANGED_LIST_FILE"
 
         if [ -n "${INPUT_CHANGED_FILES:-}" ]; then
-          printf '%s\n' "$INPUT_CHANGED_FILES" | tr ' \t,' '\n\n\n' | sed '/^$/d' > "$CHANGED_LIST_FILE"
+          printf '%s\n' "$INPUT_CHANGED_FILES" | tr -d '\r' | tr ' \t,' '\n\n\n' | sed '/^$/d' > "$CHANGED_LIST_FILE"
         else
           BASE_REF="${INPUT_BASE_REF:-}"
           if [ -z "$BASE_REF" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
@@ -194,7 +223,7 @@ runs:
 
           # Fallback to GitHub API using GITHUB_TOKEN if shallow clone had no local parent diff
           if [ ! -s "$CHANGED_LIST_FILE" ] && [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
-            python3 - "$GITHUB_REPOSITORY" "$PR_NUMBER" "$CHANGED_LIST_FILE" <<'PY' || true
+            "$PY_BIN" - "$GITHUB_REPOSITORY" "$PR_NUMBER" "$CHANGED_LIST_FILE" <<'PY' || true
         import json, os, sys, urllib.request
         repo, pr, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
         req = urllib.request.Request(
@@ -203,14 +232,15 @@ runs:
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             files = [row["filename"] for row in json.loads(resp.read().decode("utf-8"))]
-        with open(out_path, "w") as f:
+        with open(out_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(files) + ("\n" if files else ""))
         PY
           fi
         fi
 
         CHANGED_ARGS=()
-        while IFS= read -r line; do
+        while IFS= read -r line || [ -n "$line" ]; do
+          line="${line%$'\r'}"
           [ -n "$line" ] && CHANGED_ARGS+=("$line")
         done < "$CHANGED_LIST_FILE"
 
@@ -218,11 +248,12 @@ runs:
         echo "Changed files (${#CHANGED_ARGS[@]}): ${CHANGED_FLAT:-<none>}"
 
         DECISIONS_PATH="${INPUT_DECISIONS_OUT:-$WORK_TMP/decisions.json}"
+        DECISIONS_PATH=$(py_eval 'import os, sys; print(os.path.abspath(sys.argv[1]).replace("\\", "/"))' "$DECISIONS_PATH")
         mkdir -p "$(dirname "$DECISIONS_PATH")"
 
         if [ "${#CHANGED_ARGS[@]}" -eq 0 ]; then
-          T_END=$(python3 -c 'import time; print("%.6f" % time.time())')
-          OVERHEAD_SECONDS=$(python3 -c "print('%.3f' % ($T_END - $T_START))")
+          T_END=$(py_eval 'import time; print("%.6f" % time.time())')
+          OVERHEAD_SECONDS=$(py_eval "print('%.3f' % ($T_END - $T_START))")
           echo '{"schema":"engine.decisions/v1","diff_files":[],"full":false,"reasons":{},"counts":{"MUST_RUN":0,"SAFE_TO_SKIP":0,"UNCERTAIN":0},"selected":[],"decisions":{}}' > "$DECISIONS_PATH"
           {
             echo "selected="
@@ -240,13 +271,13 @@ runs:
 
         # 3. Normalize profile if minimal JSON/YAML was supplied without schema boilerplate, then resolve index/static/map
         PROFILE_PATH="$INPUT_PROFILE"
-        if ! python3 -c "import sys; from engine import profile; profile.load(sys.argv[1])" "$PROFILE_PATH" >/dev/null 2>&1; then
+        if ! "$PY_BIN" -c "import sys; from engine import profile; profile.load(sys.argv[1])" "$PROFILE_PATH" >/dev/null 2>&1; then
           NORM_PROFILE="$WORK_TMP/profile.json"
-          if python3 - "$PROFILE_PATH" "$NORM_PROFILE" <<'PY' >/dev/null 2>&1; then
+          if "$PY_BIN" - "$PROFILE_PATH" "$NORM_PROFILE" <<'PY' >/dev/null 2>&1; then
         import json, sys
         from engine import profile
         src, dst = sys.argv[1], sys.argv[2]
-        raw = open(src).read()
+        raw = open(src, encoding="utf-8").read()
         data = json.loads(raw) if src.endswith(".json") or raw.lstrip().startswith("{") else profile._parse_yaml(raw)
         setup = data.setdefault("setup", {})
         setup.setdefault("os_packages", [])
@@ -257,7 +288,7 @@ runs:
             ci["provider"] = "github_actions"
         ci.setdefault("provider", "github_actions")
         ci.setdefault("workflow", ".github/workflows/ci.yml")
-        with open(dst, "w") as f:
+        with open(dst, "w", encoding="utf-8", newline="\n") as f:
             json.dump(data, f)
         profile.load(dst)
         PY
@@ -276,7 +307,7 @@ runs:
         else
           AUTO_STATIC="$WORK_TMP/static.json"
           echo "No --index or --static supplied; building static import map from $PROFILE_PATH..."
-          python3 -m engine.static_imports . --profile "$PROFILE_PATH" --out "$AUTO_STATIC"
+          "$PY_BIN" -m engine.static_imports . --profile "$PROFILE_PATH" --out "$AUTO_STATIC"
           INDEX_ARGS+=(--static "$AUTO_STATIC")
           if [ -n "${INPUT_MAP:-}" ]; then
             INDEX_ARGS+=(--map "$INPUT_MAP")
@@ -285,23 +316,23 @@ runs:
 
         # 4. Run ci-proof affected-tests
         SELECTED_FILE="$WORK_TMP/selected.txt"
-        T_SEL_START=$(python3 -c 'import time; print("%.6f" % time.time())')
+        T_SEL_START=$(py_eval 'import time; print("%.6f" % time.time())')
         ci-proof affected-tests \
           --profile "$PROFILE_PATH" \
           "${INDEX_ARGS[@]}" \
           --changed "${CHANGED_ARGS[@]}" \
           --explain \
           --out "$DECISIONS_PATH" > "$SELECTED_FILE"
-        T_SEL_END=$(python3 -c 'import time; print("%.6f" % time.time())')
+        T_SEL_END=$(py_eval 'import time; print("%.6f" % time.time())')
 
-        SELECT_SECONDS=$(python3 -c "print('%.3f' % ($T_SEL_END - $T_SEL_START))")
-        OVERHEAD_SECONDS=$(python3 -c "print('%.3f' % ($T_SEL_END - $T_START))")
+        SELECT_SECONDS=$(py_eval "print('%.3f' % ($T_SEL_END - $T_SEL_START))")
+        OVERHEAD_SECONDS=$(py_eval "print('%.3f' % ($T_SEL_END - $T_START))")
 
         # 5. Export outputs via Python (handles large lists safely)
-        python3 - "$DECISIONS_PATH" "$SELECTED_FILE" "$GITHUB_OUTPUT" "$CHANGED_FLAT" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" <<'PY'
+        "$PY_BIN" - "$DECISIONS_PATH" "$SELECTED_FILE" "$GITHUB_OUTPUT" "$CHANGED_FLAT" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" <<'PY'
         import json, os, sys
         dec_path, sel_file, out_path, changed_flat, t_inst, t_sel, t_ovh = sys.argv[1:8]
-        with open(dec_path) as f:
+        with open(dec_path, encoding="utf-8") as f:
             d = json.load(f)
         selected = d.get("selected", [])
         full = bool(d.get("full", False))
@@ -315,15 +346,15 @@ runs:
                 acc.append(item)
                 total += len(item) + 1
             selected_str = " ".join(acc)
-        with open(out_path, "a") as out:
+        with open(out_path, "a", encoding="utf-8", newline="\n") as out:
             out.write("selected=%s\n" % selected_str)
             out.write("selected_count=%d\n" % len(selected))
             out.write("full=%s\n" % ("true" if full else "false"))
-            out.write("changed_files=%s\n" % changed_flat.replace("\n", " "))
+            out.write("changed_files=%s\n" % changed_flat.replace("\r", "").replace("\n", " "))
             out.write("install_seconds=%s\n" % t_inst)
             out.write("select_seconds=%s\n" % t_sel)
             out.write("overhead_seconds=%s\n" % t_ovh)
-            out.write("decisions_path=%s\n" % dec_path)
+            out.write("decisions_path=%s\n" % dec_path.replace("\\", "/"))
         print("ci-proof decision: full=%s, selected=%d test files, counts=%s, reasons=%s" % (
             full, len(selected), d.get("counts"), d.get("reasons")))
         print("timings: install=%ss, select=%ss, total_overhead=%ss" % (t_inst, t_sel, t_ovh))
@@ -345,7 +376,22 @@ runs:
         OVERHEAD_SECONDS: ${{ steps.select.outputs.overhead_seconds }}
       run: |
         set -euo pipefail
-        T_CMD_START=$(python3 -c 'import time; print("%.6f" % time.time())')
+        PY_BIN=""
+        for cand in python3 python /usr/bin/python3; do
+          if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys; assert sys.version_info >= (3, 9)" >/dev/null 2>&1; then
+            PY_BIN="$cand"
+            break
+          fi
+        done
+        if [ -z "$PY_BIN" ]; then
+          echo "::error::ci-proof requires Python >= 3.9 on PATH"
+          exit 1
+        fi
+        py_eval() {
+          "$PY_BIN" -c "$1" "${@:2}" | tr -d '\r'
+        }
+
+        T_CMD_START=$(py_eval 'import time; print("%.6f" % time.time())')
         if [ -n "${INPUT_COMMAND:-}" ]; then
           echo "::group::ci-proof: run test command"
           if [ "${FULL_RUN}" = "true" ]; then
@@ -353,7 +399,7 @@ runs:
               echo "Full suite required (full=true); running full_command: $INPUT_FULL_COMMAND"
               eval "$INPUT_FULL_COMMAND"
             elif [ "${SELECTED_COUNT:-0}" -le 200 ] && [ -f "${DECISIONS_PATH:-}" ]; then
-              SELECTED_TESTS=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1])).get("selected",[])))' "$DECISIONS_PATH")
+              SELECTED_TESTS=$(py_eval 'import json,sys; print(" ".join(json.load(open(sys.argv[1], encoding="utf-8")).get("selected",[])))' "$DECISIONS_PATH")
               echo "Full suite required (full=true, ${SELECTED_COUNT} files); running: $INPUT_COMMAND $SELECTED_TESTS"
               eval "$INPUT_COMMAND $SELECTED_TESTS"
             else
@@ -361,7 +407,7 @@ runs:
               eval "$INPUT_COMMAND"
             fi
           elif [ "${SELECTED_COUNT:-0}" -gt 0 ] && [ -f "${DECISIONS_PATH:-}" ]; then
-            SELECTED_TESTS=$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1])).get("selected",[])))' "$DECISIONS_PATH")
+            SELECTED_TESTS=$(py_eval 'import json,sys; print(" ".join(json.load(open(sys.argv[1], encoding="utf-8")).get("selected",[])))' "$DECISIONS_PATH")
             echo "Running ${SELECTED_COUNT} affected test file(s): $INPUT_COMMAND $SELECTED_TESTS"
             eval "$INPUT_COMMAND $SELECTED_TESTS"
           else
@@ -369,18 +415,18 @@ runs:
           fi
           echo "::endgroup::"
         fi
-        T_CMD_END=$(python3 -c 'import time; print("%.6f" % time.time())')
-        TEST_SECONDS=$(python3 -c "print('%.3f' % ($T_CMD_END - $T_CMD_START if '''${INPUT_COMMAND:-}''' else 0.0))")
+        T_CMD_END=$(py_eval 'import time; print("%.6f" % time.time())')
+        TEST_SECONDS=$(py_eval "print('%.3f' % ($T_CMD_END - $T_CMD_START if '''${INPUT_COMMAND:-}''' else 0.0))")
         echo "test_seconds=$TEST_SECONDS" >> "$GITHUB_OUTPUT"
 
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "${DECISIONS_PATH:-}" ]; then
-          python3 - "$DECISIONS_PATH" "$GITHUB_STEP_SUMMARY" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" "$TEST_SECONDS" <<'PY'
+          "$PY_BIN" - "$DECISIONS_PATH" "$GITHUB_STEP_SUMMARY" "$INSTALL_SECONDS" "$SELECT_SECONDS" "$OVERHEAD_SECONDS" "$TEST_SECONDS" <<'PY'
         import json, sys
         dec_path, summary_path, t_inst, t_sel, t_ovh, t_test = sys.argv[1:7]
-        with open(dec_path) as f:
+        with open(dec_path, encoding="utf-8") as f:
             d = json.load(f)
         counts = d.get("counts", {})
-        with open(summary_path, "a") as out:
+        with open(summary_path, "a", encoding="utf-8", newline="\n") as out:
             out.write("### ci-proof Test Selection\n\n")
             out.write("| Metric | Value |\n|---|---|\n")
             out.write("| Changed files | `%d` |\n" % len(d.get("diff_files", [])))
