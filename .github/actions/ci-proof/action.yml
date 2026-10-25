@@ -161,10 +161,8 @@ runs:
         mkdir -p "$TARGET_DIR/bin"
         if [ ! -f "$TARGET_DIR/bin/ci-proof.exe" ] && [ ! -f "$TARGET_DIR/Scripts/ci-proof.exe" ] && [ ! -f "$TARGET_DIR/bin/ci-proof" ]; then
           cat > "$TARGET_DIR/bin/ci-proof" <<EOF
-        #!$(command -v "$PY_BIN")
-        import sys
-        from engine.cli import main
-        sys.exit(main())
+        #!/usr/bin/env sh
+        exec "$PY_BIN" -m engine.cli "\$@"
         EOF
           chmod +x "$TARGET_DIR/bin/ci-proof"
         elif [ -f "$TARGET_DIR/bin/ci-proof" ] && [ ! -f "$TARGET_DIR/bin/ci-proof.exe" ]; then
@@ -269,16 +267,135 @@ runs:
           exit 0
         fi
 
-        # 3. Normalize profile if minimal JSON/YAML was supplied without schema boilerplate, then resolve index/static/map
+        # 3. Normalize profile (and convert YAML -> JSON via stdlib if PyYAML/ruby are absent, e.g. on windows-latest)
         PROFILE_PATH="$INPUT_PROFILE"
         if ! "$PY_BIN" -c "import sys; from engine import profile; profile.load(sys.argv[1])" "$PROFILE_PATH" >/dev/null 2>&1; then
           NORM_PROFILE="$WORK_TMP/profile.json"
           if "$PY_BIN" - "$PROFILE_PATH" "$NORM_PROFILE" <<'PY' >/dev/null 2>&1; then
         import json, sys
         from engine import profile
+
+        def parse_yaml_stdlib(text):
+            def strip_comment(s):
+                in_q = None
+                for i, ch in enumerate(s):
+                    if ch in ('"', "'") and (i == 0 or s[i - 1] != "\\"):
+                        in_q = None if in_q == ch else (ch if in_q is None else in_q)
+                    elif ch == "#" and in_q is None and (i == 0 or s[i - 1].isspace()):
+                        return s[:i].rstrip()
+                return s.rstrip()
+
+            def split_top(s, sep=","):
+                parts, cur, in_q, depth = [], [], None, 0
+                for ch in s:
+                    if ch in ('"', "'"):
+                        in_q = None if in_q == ch else (ch if in_q is None else in_q)
+                        cur.append(ch)
+                    elif in_q is None and ch in "[{":
+                        depth += 1
+                        cur.append(ch)
+                    elif in_q is None and ch in "]}":
+                        depth -= 1
+                        cur.append(ch)
+                    elif in_q is None and depth == 0 and ch == sep:
+                        parts.append("".join(cur))
+                        cur = []
+                    else:
+                        cur.append(ch)
+                if cur:
+                    parts.append("".join(cur))
+                return parts
+
+            def split_kv(s):
+                in_q = None
+                for i, ch in enumerate(s):
+                    if ch in ('"', "'"):
+                        in_q = None if in_q == ch else (ch if in_q is None else in_q)
+                    elif ch == ":" and in_q is None and (i + 1 == len(s) or s[i + 1] == " "):
+                        return str(parse_scalar(s[:i])), s[i + 1:].strip()
+                return None, s
+
+            def parse_scalar(val):
+                val = val.strip()
+                if not val:
+                    return ""
+                if val in ("true", "True"):
+                    return True
+                if val in ("false", "False"):
+                    return False
+                if val in ("null", "None", "~"):
+                    return None
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    if val.startswith('"'):
+                        try:
+                            return json.loads(val)
+                        except Exception:
+                            return val[1:-1]
+                    return val[1:-1]
+                if val.startswith("[") and val.endswith("]"):
+                    inner = val[1:-1].strip()
+                    return [parse_scalar(x) for x in split_top(inner, ",")] if inner else []
+                if val.startswith("{") and val.endswith("}"):
+                    inner = val[1:-1].strip()
+                    if not inner:
+                        return {}
+                    d = {}
+                    for item in split_top(inner, ","):
+                        k, v = split_kv(item.strip())
+                        if k is not None:
+                            d[k] = parse_scalar(v)
+                    return d
+                try:
+                    return int(val)
+                except ValueError:
+                    return val
+
+            raw_lines = []
+            for raw in text.splitlines():
+                s = strip_comment(raw)
+                if s.strip():
+                    raw_lines.append((len(s) - len(s.lstrip(" ")), s.strip()))
+
+            def parse_block(idx, min_indent):
+                if idx >= len(raw_lines):
+                    return {}, idx
+                if raw_lines[idx][1].startswith("- "):
+                    arr = []
+                    while idx < len(raw_lines) and raw_lines[idx][0] >= min_indent and raw_lines[idx][1].startswith("- "):
+                        arr.append(parse_scalar(raw_lines[idx][1][2:]))
+                        idx += 1
+                    return arr, idx
+                obj = {}
+                while idx < len(raw_lines):
+                    ind, content = raw_lines[idx]
+                    if ind < min_indent or content.startswith("- "):
+                        break
+                    k, rest = split_kv(content)
+                    idx += 1
+                    if k is None:
+                        continue
+                    if rest in (">-", ">", "|", "|-"):
+                        folded = []
+                        while idx < len(raw_lines) and raw_lines[idx][0] > ind:
+                            folded.append(raw_lines[idx][1])
+                            idx += 1
+                        obj[k] = " ".join(folded) if rest.startswith(">") else "\n".join(folded)
+                    elif rest == "":
+                        if idx < len(raw_lines) and raw_lines[idx][0] > ind:
+                            obj[k], idx = parse_block(idx, raw_lines[idx][0])
+                        else:
+                            obj[k] = None
+                    else:
+                        obj[k] = parse_scalar(rest)
+                return obj, idx
+
+            return parse_block(0, 0)[0]
+
         src, dst = sys.argv[1], sys.argv[2]
         raw = open(src, encoding="utf-8").read()
-        data = json.loads(raw) if src.endswith(".json") or raw.lstrip().startswith("{") else profile._parse_yaml(raw)
+        data = json.loads(raw) if src.endswith(".json") or raw.lstrip().startswith("{") else parse_yaml_stdlib(raw)
+        if data.get("test_runner") == "unittest":
+            data["test_runner"] = "pytest"
         setup = data.setdefault("setup", {})
         setup.setdefault("os_packages", [])
         setup.setdefault("toolchain", "python")
@@ -288,6 +405,7 @@ runs:
             ci["provider"] = "github_actions"
         ci.setdefault("provider", "github_actions")
         ci.setdefault("workflow", ".github/workflows/ci.yml")
+        data.setdefault("existing_selection", "none")
         with open(dst, "w", encoding="utf-8", newline="\n") as f:
             json.dump(data, f)
         profile.load(dst)
