@@ -6,14 +6,14 @@ name: Safety check (mutation)
 # was inside our selection.
 
 on:
+  push:
+    branches:
+      - dv4/leaf-pruning
   workflow_dispatch:
     inputs:
       seed:
         description: Random seed for mutant choice
         default: "1"
-      runtime_run_id:
-        description: Run ID of the analyze-traces run that produced map_testfiles.json.gz
-        default: "37961403469"
 
 permissions:
   contents: read
@@ -33,8 +33,12 @@ jobs:
       uv_version: ${{ steps.info.outputs.uv_version }}
       python_version: ${{ steps.info.outputs.python_version }}
       cache_key: ${{ steps.info.outputs.cache_key }}
+      ha_commit: ${{ steps.info.outputs.ha_commit }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: Aamir-raza-1/core
+          ref: dv4/leaf-pruning
       - uses: ./.github/actions/cache-apt-packages
         with:
           packages: bluez ffmpeg libturbojpeg
@@ -46,6 +50,7 @@ jobs:
           echo "uv_version=$(grep '^uv==' requirements.txt | cut -d'=' -f3)" >> "$GITHUB_OUTPUT"
           echo "python_version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
           echo "cache_key=trace-${{ hashFiles('requirements.txt', 'requirements_all.txt', 'requirements_test.txt', 'homeassistant/package_constraints.txt') }}" >> "$GITHUB_OUTPUT"
+          echo "ha_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/restore-or-build-venv
         with:
           python-version: ${{ steps.info.outputs.python_version }}
@@ -56,7 +61,7 @@ jobs:
           save: "true"
       - id: gen
         env:
-          SEED: ${{ inputs.seed }}
+          SEED: ${{ inputs.seed || '1' }}
         run: |
           . venv/bin/activate
           python script/trace/static_imports.py . --out mutation/static.json
@@ -76,7 +81,7 @@ jobs:
     name: Batch ${{ matrix.batch }} group ${{ matrix.group }}
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +89,9 @@ jobs:
         group: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: Aamir-raza-1/core
+          ref: dv4/leaf-pruning
       - uses: ./.github/actions/cache-apt-packages
         with:
           packages: bluez ffmpeg libturbojpeg libxml2-utils
@@ -109,13 +117,21 @@ jobs:
           python3 -m script.translations develop --all
           python -m script.trace.mutate apply mutation ${{ matrix.batch }}
           mkdir -p junit
-          T0=$(python3 -c "import time; print(time.time())")
-          python3 -b -X dev -m pytest -qq --timeout=30 --numprocesses logical --dist=loadfile \
-            -o console_output_style=count -p no:sugar -p no:cacheprovider \
-            --junitxml=junit/junit-b${{ matrix.batch }}-g${{ matrix.group }}.xml -o junit_family=legacy \
-            $(sed -n "${{ matrix.group }},1p" mutation/pytest_buckets.txt) > junit/out.txt 2>&1 || true
-          python3 -c "import json, time; json.dump({'batch': ${{ matrix.batch }}, 'group': ${{ matrix.group }}, 'wall_seconds': round(time.time() - $T0, 3)}, open('junit/timing-b${{ matrix.batch }}-g${{ matrix.group }}.json', 'w'))"
-          tail -2 junit/out.txt
+          for attempt in 1 2; do
+            rm -f junit/junit-b${{ matrix.batch }}-g${{ matrix.group }}.xml
+            T0=$(python3 -c "import time; print(time.time())")
+            timeout --signal=INT --kill-after=20s 9m \
+              python3 -b -X dev -m pytest -qq --timeout=30 --numprocesses logical --dist=loadfile \
+              -o console_output_style=count -p no:sugar -p no:cacheprovider \
+              --junitxml=junit/junit-b${{ matrix.batch }}-g${{ matrix.group }}.xml -o junit_family=legacy \
+              $(sed -n "${{ matrix.group }},1p" mutation/pytest_buckets.txt) > junit/out.txt 2>&1 || true
+            python3 -c "import json, time; json.dump({'batch': ${{ matrix.batch }}, 'group': ${{ matrix.group }}, 'attempt': $attempt, 'wall_seconds': round(time.time() - $T0, 3)}, open('junit/timing-b${{ matrix.batch }}-g${{ matrix.group }}.json', 'w'))"
+            if [ -s "junit/junit-b${{ matrix.batch }}-g${{ matrix.group }}.xml" ]; then
+              break
+            fi
+            echo "Attempt $attempt did not produce junit XML; retrying..."
+          done
+          tail -5 junit/out.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -131,6 +147,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: Aamir-raza-1/core
+          ref: dv4/leaf-pruning
       - uses: ./.github/actions/cache-apt-packages
         with:
           packages: bluez ffmpeg libturbojpeg libxml2-utils
@@ -162,11 +181,14 @@ jobs:
           path: selected_out/
 
   analyze:
-    needs: [run, run-selected]
+    needs: [prepare, run, run-selected]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: Aamir-raza-1/core
+          ref: dv4/leaf-pruning
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -182,18 +204,39 @@ jobs:
         with:
           name: dv4-selected
           path: dv4-selected
-      - uses: actions/download-artifact@v4
-        with:
-          name: analysis
-          path: runtime
-          run-id: ${{ inputs.runtime_run_id }}
-          github-token: ${{ github.token }}
-      - run: |
+      - name: Compute full-suite and selected safety + timing comparison
+        run: |
           gunzip mutation/static.json.gz
           python3 script/trace/safety.py --junit junit --mutation mutation --static mutation/static.json \
-            --runtime runtime/map_testfiles.json.gz --out safety.json
+            --runtime script/trace/map_testfiles.json.gz --out safety.json
+          python3 - <<'PY'
+          import glob, json, os, re, xml.etree.ElementTree as ET
+          timings = {}
+          for p in sorted(glob.glob("junit/**/timing-b*-g*.json", recursive=True)):
+              d = json.load(open(p))
+              b = str(d["batch"])
+              timings.setdefault(b, {"groups": {}, "wall_seconds_sum": 0.0, "wall_seconds_max": 0.0, "junit_testcase_seconds": 0.0, "testcases": 0})
+              timings[b]["groups"][str(d["group"])] = d["wall_seconds"]
+              timings[b]["wall_seconds_sum"] = round(timings[b]["wall_seconds_sum"] + d["wall_seconds"], 3)
+              timings[b]["wall_seconds_max"] = round(max(timings[b]["wall_seconds_max"], d["wall_seconds"]), 3)
+          for p in sorted(glob.glob("junit/**/junit-b*-g*.xml", recursive=True)):
+              m = re.search(r"junit-b(\d+)-g(\d+)\.xml", p)
+              if not m:
+                  continue
+              b = m.group(1)
+              timings.setdefault(b, {"groups": {}, "wall_seconds_sum": 0.0, "wall_seconds_max": 0.0, "junit_testcase_seconds": 0.0, "testcases": 0})
+              sec = 0.0
+              cnt = 0
+              for tc in ET.parse(p).getroot().iter("testcase"):
+                  cnt += 1
+                  sec += float(tc.get("time") or 0.0)
+              timings[b]["junit_testcase_seconds"] = round(timings[b]["junit_testcase_seconds"] + sec, 3)
+              timings[b]["testcases"] += cnt
+          json.dump(timings, open("full_suite_timings.json", "w"), indent=2)
+          print("Full-suite timings per batch:", json.dumps(timings, indent=2))
+          PY
           mkdir -p out
-          cp safety.json mutation/mutants.json mutation/batches.json mutation/dv4_prs.json dv4-selected/dv4_selected.json out/
+          cp safety.json full_suite_timings.json mutation/mutants.json mutation/batches.json mutation/dv4_prs.json dv4-selected/dv4_selected.json out/
           tar -czf out/junit.tar.gz junit dv4-selected
       - uses: actions/upload-artifact@v4
         with:

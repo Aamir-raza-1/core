@@ -107,7 +107,7 @@ def generate(targets_file: str, seed: int, out: str) -> None:
             first = next(x for x in mutants if x["id"] == b[0])
             if first["file"].startswith("homeassistant/helpers/"):
                 continue
-            if area not in {_area(next(x for x in mutants if x["id"] == i)["file"]) for i in b} and len(b) < 12:
+            if area not in {_area(next(x for x in mutants if x["id"] == i)["file"]) for i in b} and len(b) < 25:
                 b.append(m["id"])
                 break
         else:
