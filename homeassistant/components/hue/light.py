@@ -17,7 +17,7 @@ async def async_setup_entry(
     """Set up light entities."""
     bridge = config_entry.runtime_data
 
-    api_version = bridge.api_version
+    api_version = int(bridge.api_version)
     if api_version == 1:
         await setup_entry_v1(hass, config_entry, async_add_entities)
         return
